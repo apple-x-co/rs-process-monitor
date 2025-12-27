@@ -35,7 +35,7 @@ fn show_process_by_pid(sys: &System, target_pid: u32) {
     let pid = Pid::from_u32(target_pid);
 
     if let Some(process) = sys.process(pid) {
-        print_process_info(process);
+        print_single_process(process);
     } else {
         eprintln!("Error: Process not found (PID: {})", target_pid);
         std::process::exit(1);
@@ -44,45 +44,74 @@ fn show_process_by_pid(sys: &System, target_pid: u32) {
 
 /// プロセス名でプロセス情報を表示（複数マッチする可能性あり）
 fn show_processes_by_name(sys: &System, name: &str) {
-    let mut found = false;
+    let matching_processes: Vec<_> = sys.processes()
+        .iter()
+        .filter(|(_, p)| p.name().to_string_lossy().contains(name))
+        .collect();
 
-    for (_pid, process) in sys.processes() {
-        let process_name = process.name().to_string_lossy();
-
-        // 部分一致で検索
-        if process_name.contains(name) {
-            if !found {
-                println!("Found {} process(es) matching '{}':\n",
-                         count_matching_processes(sys, name), name);
-                found = true;
-            }
-            print_process_info(process);
-            println!("---");
-        }
-    }
-
-    if !found {
+    if matching_processes.is_empty() {
         eprintln!("Error: No processes found matching '{}'", name);
         std::process::exit(1);
     }
+
+    // 統計情報の計算
+    let total_count = matching_processes.len();
+    let total_memory: u64 = matching_processes.iter()
+        .map(|(_, p)| p.memory())
+        .sum();
+    let total_cpu: f32 = matching_processes.iter()
+        .map(|(_, p)| p.cpu_usage())
+        .sum();
+
+    // ヘッダー表示
+    println!("Processes matching '{}':", name);
+    println!("Total: {} process(es) | Memory: {} | CPU: {:.2}%\n",
+             total_count, format_bytes(total_memory), total_cpu);
+
+    // 表のヘッダー（数値は右寄せ >、文字列は左寄せ <）
+    println!("{:>8} {:<25} {:>8} {:>12} {:<15}",
+             "PID", "Name", "CPU %", "Memory", "Status");
+    println!("{}", "-".repeat(75));
+
+    // 各プロセスの情報を表示
+    for (_, process) in matching_processes {
+        println!("{:>8} {:<25} {:>8.2} {:>12} {:<15}",
+                 process.pid(),
+                 truncate_string(&process.name().to_string_lossy(), 25),
+                 process.cpu_usage(),
+                 format_bytes(process.memory()),
+                 format_status(process.status()));
+    }
 }
 
-/// マッチするプロセスの数をカウント
-fn count_matching_processes(sys: &System, name: &str) -> usize {
-    sys.processes()
-        .values()
-        .filter(|p| p.name().to_string_lossy().contains(name))
-        .count()
+/// ステータスを短く整形
+fn format_status(status: sysinfo::ProcessStatus) -> String {
+    match status {
+        sysinfo::ProcessStatus::Run => "Run".to_string(),
+        sysinfo::ProcessStatus::Sleep => "Sleep".to_string(),
+        sysinfo::ProcessStatus::Idle => "Idle".to_string(),
+        sysinfo::ProcessStatus::Zombie => "Zombie".to_string(),
+        _ => format!("{:?}", status).chars().take(15).collect(),
+    }
 }
 
-/// プロセス情報を整形して表示
-fn print_process_info(process: &sysinfo::Process) {
+/// 単一プロセスの詳細情報を表示
+fn print_single_process(process: &sysinfo::Process) {
     println!("Process Information:");
     println!("  PID:     {}", process.pid());
     println!("  Name:    {}", process.name().to_string_lossy());
     println!("  CPU:     {:.2}%", process.cpu_usage());
     println!("  Memory:  {}", format_bytes(process.memory()));
     println!("  Status:  {:?}", process.status());
+}
+
+/// 文字列を指定長で切り詰める
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len-3])
+    }
 }
 
 fn format_bytes(bytes: u64) -> String {
