@@ -1,3 +1,5 @@
+use std::thread;
+use std::time::Duration;
 use clap::Parser;
 use sysinfo::{System, Pid, ProcessesToUpdate};
 
@@ -12,21 +14,62 @@ struct Args {
     /// 監視するプロセス名（部分一致）
     #[arg(short, long, conflicts_with = "pid")]
     name: Option<String>,
+
+    /// リアルタイム監視モード（指定した間隔で更新、単位: 秒）
+    #[arg(short, long)]
+    watch: Option<u64>,
 }
 
 fn main() {
     let args = Args::parse();
 
+    // リアルタイム監視モードの場合
+    if let Some(interval) = args.watch {
+        watch_mode(&args, interval);
+    } else {
+        // 通常モード（1回だけ表示）
+        single_shot_mode(&args);
+    }
+}
+
+/// 1回だけ表示するモード
+fn single_shot_mode(args: &Args) {
     let mut sys = System::new_all();
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
-    if let Some(name) = args.name {
-        // プロセス名で検索
-        show_processes_by_name(&sys, &name);
+    if let Some(name) = &args.name {
+        show_processes_by_name(&sys, name);
     } else {
-        // PIDで検索（指定なしなら自分自身）
         let target_pid = args.pid.unwrap_or_else(|| std::process::id());
         show_process_by_pid(&sys, target_pid);
+    }
+}
+
+/// リアルタイム監視モード
+fn watch_mode(args: &Args, interval_secs: u64) {
+    let mut sys = System::new_all();
+
+    loop {
+        // 画面をクリア（ANSIエスケープシーケンス）
+        print!("\x1B[2J\x1B[1;1H");
+
+        // プロセス情報を更新
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+
+        // 現在時刻を表示
+        println!("Last updated: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+        println!("Press Ctrl+C to exit\n");
+
+        // プロセス情報を表示
+        if let Some(name) = &args.name {
+            show_processes_by_name(&sys, name);
+        } else {
+            let target_pid = args.pid.unwrap_or_else(|| std::process::id());
+            show_process_by_pid(&sys, target_pid);
+        }
+
+        // 指定秒数待機
+        thread::sleep(Duration::from_secs(interval_secs));
     }
 }
 
