@@ -18,6 +18,19 @@ struct Args {
     /// リアルタイム監視モード（指定した間隔で更新、単位: 秒）
     #[arg(short, long)]
     watch: Option<u64>,
+
+    /// ソート順: memory (デフォルト), cpu, pid, name
+    #[arg(short, long, default_value = "memory")]
+    sort: SortOrder,
+}
+
+/// ソート順の指定
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum SortOrder {
+    Memory,  // メモリ使用量順（降順）
+    Cpu,     // CPU使用率順（降順）
+    Pid,     // PID順（昇順）
+    Name,    // プロセス名順（昇順）
 }
 
 fn main() {
@@ -38,7 +51,7 @@ fn single_shot_mode(args: &Args) {
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     if let Some(name) = &args.name {
-        show_processes_by_name(&sys, name);
+        show_processes_by_name(&sys, name, &args.sort);
     } else {
         let target_pid = args.pid.unwrap_or_else(|| std::process::id());
         show_process_by_pid(&sys, target_pid);
@@ -62,7 +75,7 @@ fn watch_mode(args: &Args, interval_secs: u64) {
 
         // プロセス情報を表示
         if let Some(name) = &args.name {
-            show_processes_by_name(&sys, name);
+            show_processes_by_name(&sys, name, &args.sort);
         } else {
             let target_pid = args.pid.unwrap_or_else(|| std::process::id());
             show_process_by_pid(&sys, target_pid);
@@ -86,8 +99,8 @@ fn show_process_by_pid(sys: &System, target_pid: u32) {
 }
 
 /// プロセス名でプロセス情報を表示（複数マッチする可能性あり）
-fn show_processes_by_name(sys: &System, name: &str) {
-    let matching_processes: Vec<_> = sys.processes()
+fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder) {
+    let mut matching_processes: Vec<_> = sys.processes()
         .iter()
         .filter(|(_, p)| p.name().to_string_lossy().contains(name))
         .collect();
@@ -95,6 +108,26 @@ fn show_processes_by_name(sys: &System, name: &str) {
     if matching_processes.is_empty() {
         eprintln!("Error: No processes found matching '{}'", name);
         std::process::exit(1);
+    }
+
+    // ソート
+    match sort_order {
+        SortOrder::Memory => {
+            matching_processes.sort_by(|a, b| b.1.memory().cmp(&a.1.memory()));
+        }
+        SortOrder::Cpu => {
+            matching_processes.sort_by(|a, b| {
+                b.1.cpu_usage().partial_cmp(&a.1.cpu_usage()).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        SortOrder::Pid => {
+            matching_processes.sort_by_key(|(_, p)| p.pid());
+        }
+        SortOrder::Name => {
+            matching_processes.sort_by(|a, b| {
+                a.1.name().to_string_lossy().cmp(&b.1.name().to_string_lossy())
+            });
+        }
     }
 
     // 統計情報の計算
