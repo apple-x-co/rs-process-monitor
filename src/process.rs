@@ -61,17 +61,29 @@ pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder) 
 
     // 統計情報の計算
     let total_count = matching_processes.len();
-    let total_memory: u64 = matching_processes.iter()
-        .map(|(_, p)| p.memory())
-        .sum();
-    let total_cpu: f32 = matching_processes.iter()
-        .map(|(_, p)| p.cpu_usage())
-        .sum();
+    let total_memory: u64 = matching_processes.iter().map(|(_, p)| p.memory()).sum();
+    let total_cpu: f32 = matching_processes.iter().map(|(_, p)| p.cpu_usage()).sum();
+
+    // メモリの統計値（Min/Avg/Max）
+    let (min_memory, avg_memory, max_memory) = if total_count > 0 {
+        let memories: Vec<u64> = matching_processes.iter().map(|(_, p)| p.memory()).collect();
+        let min = *memories.iter().min().unwrap_or(&0);
+        let max = *memories.iter().max().unwrap_or(&0);
+        let avg = total_memory / total_count as u64;
+        (min, avg, max)
+    } else {
+        (0, 0, 0)
+    };
 
     // ヘッダー表示
     println!("Processes matching '{}' (sorted by {:?}):", name, sort_order);
-    println!("Total: {} process(es) | Memory: {} | CPU: {:.2}%\n",
-             total_count, format_bytes(total_memory), total_cpu);
+    println!("Total: {} process(es)", total_count);
+    println!("Memory: {} (Min: {}, Avg: {}, Max: {})",
+             format_bytes(total_memory),
+             format_bytes(min_memory),
+             format_bytes(avg_memory),
+             format_bytes(max_memory));
+    println!("CPU: {:.2}%\n", total_cpu);
 
     // 表のヘッダー
     println!("{:<8} {:<25} {:<8} {:<12} {:<15}",

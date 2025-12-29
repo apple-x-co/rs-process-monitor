@@ -8,8 +8,8 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style}
-    ,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table},
     Frame, Terminal,
 };
@@ -120,7 +120,7 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // ヘッダー
+            Constraint::Length(5),  // ヘッダー（3行→5行に変更）
             Constraint::Min(10),    // プロセステーブル
             Constraint::Length(3),  // フッター
         ])
@@ -157,13 +157,44 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder) {
     let total_memory: u64 = matching_processes.iter().map(|(_, p)| p.memory()).sum();
     let total_cpu: f32 = matching_processes.iter().map(|(_, p)| p.cpu_usage()).sum();
 
-    // ヘッダー
-    let header_text = format!(
-        "Process Monitor: '{}' | Processes: {} | Memory: {} | CPU: {:.2}% | Sort: {:?}",
-        name, total_count, format_bytes(total_memory), total_cpu, sort_order
-    );
-    let header = Paragraph::new(header_text)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+    // メモリの統計値（Min/Avg/Max）
+    let (min_memory, avg_memory, max_memory) = if total_count > 0 {
+        let memories: Vec<u64> = matching_processes.iter().map(|(_, p)| p.memory()).collect();
+        let min = *memories.iter().min().unwrap_or(&0);
+        let max = *memories.iter().max().unwrap_or(&0);
+        let avg = total_memory / total_count as u64;
+        (min, avg, max)
+    } else {
+        (0, 0, 0)
+    };
+
+    // ヘッダー（複数行に変更）
+    let header_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("Process Monitor: '{}' | Sort: {:?}", name, sort_order),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            )
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("Processes: {} | CPU: {:.2}%", total_count, total_cpu),
+                Style::default().fg(Color::White)
+            )
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("Memory: {} (Min: {}, Avg: {}, Max: {})",
+                        format_bytes(total_memory),
+                        format_bytes(min_memory),
+                        format_bytes(avg_memory),
+                        format_bytes(max_memory)),
+                Style::default().fg(Color::Green)
+            )
+        ]),
+    ];
+
+    let header = Paragraph::new(header_lines)
         .block(Block::default().borders(Borders::ALL).title("Info"));
     f.render_widget(header, chunks[0]);
 
