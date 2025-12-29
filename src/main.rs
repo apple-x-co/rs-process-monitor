@@ -1,6 +1,7 @@
 mod formatter;
 mod process;
 mod monitor;
+mod tui;
 
 use clap::Parser;
 use sysinfo::{System, ProcessesToUpdate};
@@ -27,6 +28,10 @@ struct Args {
     /// ソート順: memory (デフォルト), cpu, pid, name
     #[arg(short, long, default_value = "memory")]
     sort: SortOrder,
+
+    /// TUIモードを使用（--watchと併用時のみ有効）
+    #[arg(short = 't', long)]
+    tui: bool,
 }
 
 fn main() {
@@ -34,12 +39,26 @@ fn main() {
 
     // リアルタイム監視モードの場合
     if let Some(interval) = args.watch {
-        let monitor_args = MonitorArgs {
-            pid: args.pid,
-            name: args.name.as_deref(),
-            sort: &args.sort,
-        };
-        watch_mode(monitor_args, interval);
+        if args.tui {
+            // TUIモード
+            if let Some(name) = &args.name {
+                if let Err(e) = tui::run_tui(name, &args.sort, interval) {
+                    eprintln!("Error running TUI: {}", e);
+                    std::process::exit(1);
+                }
+            } else {
+                eprintln!("Error: TUI mode requires --name option");
+                std::process::exit(1);
+            }
+        } else {
+            // 通常の監視モード
+            let monitor_args = MonitorArgs {
+                pid: args.pid,
+                name: args.name.as_deref(),
+                sort: &args.sort,
+            };
+            watch_mode(monitor_args, interval);
+        }
     } else {
         // 通常モード（1回だけ表示）
         single_shot_mode(&args);
