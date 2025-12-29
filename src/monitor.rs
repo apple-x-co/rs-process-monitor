@@ -7,6 +7,7 @@ pub struct MonitorArgs<'a> {
     pub pid: Option<u32>,
     pub name: Option<&'a str>,
     pub sort: &'a SortOrder,
+    pub min_memory_mb: Option<u64>,
 }
 
 /// リアルタイム監視モード
@@ -26,7 +27,7 @@ pub fn watch_mode(args: MonitorArgs, interval_secs: u64) {
 
         // プロセス情報を表示
         if let Some(name) = args.name {
-            show_processes_by_name(&sys, name, args.sort);
+            show_processes_by_name(&sys, name, args.sort, args.min_memory_mb);
         } else {
             let target_pid = args.pid.unwrap_or_else(|| std::process::id());
             show_process_by_pid(&sys, target_pid);

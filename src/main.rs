@@ -32,6 +32,10 @@ struct Args {
     /// TUIモードを使用（--watchと併用時のみ有効）
     #[arg(short = 't', long)]
     tui: bool,
+
+    /// 最小メモリ使用量でフィルタ（MB単位、指定値未満のプロセスを除外）
+    #[arg(long)]
+    min_memory_mb: Option<u64>,
 }
 
 fn main() {
@@ -42,7 +46,7 @@ fn main() {
         if args.tui {
             // TUIモード
             if let Some(name) = &args.name {
-                if let Err(e) = tui::run_tui(name, &args.sort, interval) {
+                if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb) {
                     eprintln!("Error running TUI: {}", e);
                     std::process::exit(1);
                 }
@@ -56,6 +60,7 @@ fn main() {
                 pid: args.pid,
                 name: args.name.as_deref(),
                 sort: &args.sort,
+                min_memory_mb: args.min_memory_mb,
             };
             watch_mode(monitor_args, interval);
         }
@@ -71,7 +76,7 @@ fn single_shot_mode(args: &Args) {
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     if let Some(name) = &args.name {
-        show_processes_by_name(&sys, name, &args.sort);
+        show_processes_by_name(&sys, name, &args.sort, args.min_memory_mb);
     } else {
         let target_pid = args.pid.unwrap_or_else(|| std::process::id());
         show_process_by_pid(&sys, target_pid);

@@ -28,14 +28,27 @@ pub fn show_process_by_pid(sys: &System, target_pid: u32) {
 }
 
 /// プロセス名でプロセス情報を表示（複数マッチする可能性あり）
-pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder) {
+pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder, min_memory_mb: Option<u64>) {
+    let min_memory_bytes = min_memory_mb.map(|mb| mb * 1024 * 1024);
+
     let mut matching_processes: Vec<_> = sys.processes()
         .iter()
-        .filter(|(_, p)| p.name().to_string_lossy().contains(name))
+        .filter(|(_, p)| {
+            let matches_name = p.name().to_string_lossy().contains(name);
+            let meets_min_memory = if let Some(min_bytes) = min_memory_bytes {
+                p.memory() >= min_bytes
+            } else {
+                true
+            };
+            matches_name && meets_min_memory
+        })
         .collect();
 
     if matching_processes.is_empty() {
         eprintln!("Error: No processes found matching '{}'", name);
+        if let Some(min_mb) = min_memory_mb {
+            eprintln!("(with minimum memory filter: {} MB)", min_mb);
+        }
         std::process::exit(1);
     }
 
@@ -76,7 +89,12 @@ pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder) 
     };
 
     // ヘッダー表示
-    println!("Processes matching '{}' (sorted by {:?}):", name, sort_order);
+    print!("Processes matching '{}'", name);
+    if let Some(min_mb) = min_memory_mb {
+        print!(" (>= {} MB)", min_mb);
+    }
+    println!(" (sorted by {:?}):", sort_order);
+
     println!("Total: {} process(es)", total_count);
     println!("Memory: {} (Min: {}, Avg: {}, Max: {})",
              format_bytes(total_memory),

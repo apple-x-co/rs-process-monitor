@@ -46,6 +46,7 @@ pub fn run_tui(
     name: &str,
     sort_order: &SortOrder,
     interval_secs: u64,
+    min_memory_mb: Option<u64>,
 ) -> Result<(), io::Error> {
     // ターミナルの初期化
     enable_raw_mode()?;
@@ -58,7 +59,7 @@ pub fn run_tui(
     let mut app = TuiApp::new(interval_secs);
     let mut sys = System::new_all();
 
-    let res = run_app(&mut terminal, &mut app, &mut sys, name, sort_order);
+    let res = run_app(&mut terminal, &mut app, &mut sys, name, sort_order, min_memory_mb);
 
     // ターミナルの復元
     disable_raw_mode()?;
@@ -82,6 +83,7 @@ fn run_app(
     sys: &mut System,
     name: &str,
     sort_order: &SortOrder,
+    min_memory_mb: Option<u64>,
 ) -> Result<(), io::Error> {
     loop {
         // プロセス情報の更新
@@ -92,7 +94,7 @@ fn run_app(
 
         // 画面描画
         terminal.draw(|f| {
-            ui(f, sys, name, sort_order);
+            ui(f, sys, name, sort_order, min_memory_mb);
         })?;
 
         // イベント処理（100msタイムアウト）
@@ -115,7 +117,7 @@ fn run_app(
     Ok(())
 }
 
-fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder) {
+fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memory_mb: Option<u64>) {
     // レイアウトの作成
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -126,10 +128,21 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder) {
         ])
         .split(f.area());
 
+    // プロセスの抽出とソート（フィルタ追加）
+    let min_memory_bytes = min_memory_mb.map(|mb| mb * 1024 * 1024);
+
     // プロセスの抽出とソート
     let mut matching_processes: Vec<_> = sys.processes()
         .iter()
-        .filter(|(_, p)| p.name().to_string_lossy().contains(name))
+        .filter(|(_, p)| {
+            let matches_name = p.name().to_string_lossy().contains(name);
+            let meets_min_memory = if let Some(min_bytes) = min_memory_bytes {
+                p.memory() >= min_bytes
+            } else {
+                true
+            };
+            matches_name && meets_min_memory
+        })
         .collect();
 
     // ソート
@@ -168,8 +181,21 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder) {
         (0, 0, 0)
     };
 
+    // ヘッダー表示時にフィルタ情報を追加
+    let title = if let Some(min_mb) = min_memory_mb {
+        format!("Process Monitor: '{}' (>= {} MB) | Sort: {:?}", name, min_mb, sort_order)
+    } else {
+        format!("Process Monitor: '{}' | Sort: {:?}", name, sort_order)
+    };
+
     // ヘッダー（複数行に変更）
     let header_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                title,
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            )
+        ]),
         Line::from(vec![
             Span::styled(
                 format!("Process Monitor: '{}' | Sort: {:?}", name, sort_order),
