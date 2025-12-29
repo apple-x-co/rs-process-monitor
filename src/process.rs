@@ -1,5 +1,5 @@
 use sysinfo::{System, Pid};
-use crate::formatter::{format_bytes, truncate_string, format_status};
+use crate::formatter::{format_bytes, truncate_string, format_status, format_system_memory, format_system_swap};
 
 /// ソート順の指定
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -88,7 +88,13 @@ pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder, 
         (0, 0, 0)
     };
 
-    // ヘッダー表示
+    // ===== ヘッダー表示（システム情報追加） =====
+    println!("=== System Information ===");
+    println!("{}", format_system_memory(sys));
+    println!("{}", format_system_swap(sys));
+    println!();
+
+    println!("=== Process Information ===");
     print!("Processes matching '{}'", name);
     if let Some(min_mb) = min_memory_mb {
         print!(" (>= {} MB)", min_mb);

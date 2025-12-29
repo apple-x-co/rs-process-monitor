@@ -1,4 +1,4 @@
-use crate::formatter::{format_bytes, format_status, truncate_string};
+use crate::formatter::{format_bytes, format_status, truncate_string, format_system_memory, format_system_swap};
 use crate::process::SortOrder;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -118,20 +118,19 @@ fn run_app(
 }
 
 fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memory_mb: Option<u64>) {
-    // レイアウトの作成
+    // レイアウトの作成（ヘッダーを拡大）
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),  // ヘッダー（3行→5行に変更）
+            Constraint::Length(7),  // ヘッダー（5行→7行に変更）
             Constraint::Min(10),    // プロセステーブル
             Constraint::Length(3),  // フッター
         ])
         .split(f.area());
 
-    // プロセスの抽出とソート（フィルタ追加）
+    // プロセスの抽出とソート
     let min_memory_bytes = min_memory_mb.map(|mb| mb * 1024 * 1024);
 
-    // プロセスの抽出とソート
     let mut matching_processes: Vec<_> = sys.processes()
         .iter()
         .filter(|(_, p)| {
@@ -181,14 +180,13 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memor
         (0, 0, 0)
     };
 
-    // ヘッダー表示時にフィルタ情報を追加
+    // ===== ヘッダー（システム情報追加） =====
     let title = if let Some(min_mb) = min_memory_mb {
         format!("Process Monitor: '{}' (>= {} MB) | Sort: {:?}", name, min_mb, sort_order)
     } else {
         format!("Process Monitor: '{}' | Sort: {:?}", name, sort_order)
     };
 
-    // ヘッダー（複数行に変更）
     let header_lines = vec![
         Line::from(vec![
             Span::styled(
@@ -198,8 +196,14 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memor
         ]),
         Line::from(vec![
             Span::styled(
-                format!("Process Monitor: '{}' | Sort: {:?}", name, sort_order),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                format_system_memory(sys),
+                Style::default().fg(Color::Yellow)
+            )
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format_system_swap(sys),
+                Style::default().fg(Color::Yellow)
             )
         ]),
         Line::from(vec![
@@ -221,10 +225,10 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memor
     ];
 
     let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title("Info"));
+        .block(Block::default().borders(Borders::ALL).title("System & Process Info"));
     f.render_widget(header, chunks[0]);
 
-    // プロセステーブル
+    // プロセステーブル（変更なし）
     let header_cells = ["PID", "Name", "CPU %", "Memory", "Status"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
@@ -257,7 +261,7 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memor
 
     f.render_widget(table, chunks[1]);
 
-    // フッター
+    // フッター（変更なし）
     let footer = Paragraph::new("Press 'q' or 'Esc' to quit")
         .style(Style::default().fg(Color::Gray))
         .block(Block::default().borders(Borders::ALL).title("Help"));
