@@ -212,22 +212,9 @@ rs-process-monitor --name httpd --watch 2 --tui --min-memory-mb 10 --sort memory
 
 ## ライセンス
 
-MIT License
-
-## 作者
-
-[@apple-x-co](https://github.com/apple-x-co)
+このプロジェクトは MIT ライセンスの下で公開されています。
 
 ## 貢献
 
-Issue や Pull Request は大歓迎です！
-
-## 関連プロジェクト
-
-- [crt.sh API CLI](https://github.com/apple-x-co/Rs-crtsh-api)
-- [PDF Generator CLI](https://github.com/apple-x-co/Rs-pdf-generator)
-- [HTTP Request CLI](https://github.com/apple-x-co/Rs-http-request)
-- [Log Analyzer](https://github.com/apple-x-co/Rs-log-analyzer)
-- [CSV Validator](https://github.com/apple-x-co/Rs-csv-validator)
-- [Mail Client CLI](https://github.com/apple-x-co/Rs-mail-client)
-- [Image Compressor](https://github.com/apple-x-co/Rs-image-compressor)
+バグ報告や機能リクエストは、GitHub の Issues でお気軽にお知らせください。
+プルリクエストも歓迎します！
