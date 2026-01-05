@@ -237,7 +237,7 @@ Apache設定の調査は別途継続。優先度の高い調査項目:
 ### Phase 5: データの永続化と分析（推奨度: ★★★）
 
 #### 機能1: 履歴記録
-```rust
+```bash
 // SQLite にデータを保存
 rs-process-monitor --name httpd --log history.db --watch 60
 ```
@@ -286,7 +286,7 @@ Analysis from 2025-12-20 14:00 to 16:00:
 ### Phase 6: アラート機能（推奨度: ★★☆）
 
 #### 機能3: 閾値アラート
-```rust
+```bash
 // メモリ使用率が80%超えたら通知
 rs-process-monitor --name httpd --watch 10 --alert-memory 80
 ```
