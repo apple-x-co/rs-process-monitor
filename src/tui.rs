@@ -1,4 +1,4 @@
-use crate::formatter::{format_bytes, format_status, truncate_string, format_system_memory, format_system_swap};
+use crate::formatter::{format_bytes, format_status, format_system_memory, format_system_swap, get_thread_count, get_tgid, truncate_string};
 use crate::process::SortOrder;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -180,6 +180,21 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memor
         (0, 0, 0)
     };
 
+    // スレッド数の集計（TGID でグループ化）
+    let mut pid_threads: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for (_, process) in &matching_processes {
+        let lwp = process.pid().as_u32();
+        let tgid = get_tgid(lwp);
+
+        if !pid_threads.contains_key(&tgid) {
+            pid_threads.insert(tgid, get_thread_count(tgid));
+        }
+    }
+    let total_threads: usize = pid_threads.values().sum();
+
+    // 実際のプロセス数（ユニークなPID）
+    let actual_process_count = pid_threads.len();
+
     // ===== ヘッダー（システム情報追加） =====
     let title = if let Some(min_mb) = min_memory_mb {
         format!("Process Monitor: '{}' (>= {} MB) | Sort: {:?}", name, min_mb, sort_order)
@@ -208,7 +223,7 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memor
         ]),
         Line::from(vec![
             Span::styled(
-                format!("Processes: {} | CPU: {:.2}%", total_count, total_cpu),
+                format!("Processes: {} ({} threads) | CPU: {:.2}%", actual_process_count, total_threads, total_cpu),
                 Style::default().fg(Color::White)
             )
         ]),
@@ -228,32 +243,47 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memor
         .block(Block::default().borders(Borders::ALL).title("System & Process Info"));
     f.render_widget(header, chunks[0]);
 
-    // プロセステーブル（変更なし）
-    let header_cells = ["PID", "Name", "CPU %", "Memory", "Status"]
+    // プロセステーブル
+    let header_cells = ["PID", "Name", "Threads", "CPU %", "Memory", "Status"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
     let header_row = Row::new(header_cells).height(1).bottom_margin(1);
 
-    let rows = matching_processes.iter().map(|(_, process)| {
-        let cells = vec![
-            Cell::from(format!("{}", process.pid())),
-            Cell::from(truncate_string(&process.name().to_string_lossy(), 20)),
-            Cell::from(format!("{:.2}", process.cpu_usage())),
-            Cell::from(format_bytes(process.memory())),
-            Cell::from(format_status(process.status())),
-        ];
-        Row::new(cells).height(1)
-    });
+    // ユニークなPIDだけを表示
+    let mut seen_pids = std::collections::HashSet::new();
+    let rows = matching_processes.iter()
+        .filter_map(|(_, process)| {
+            let lwp = process.pid().as_u32();
+            let tgid = get_tgid(lwp);
+
+            // 既に表示したPIDはスキップ
+            if seen_pids.contains(&tgid) {
+                return None;
+            }
+            seen_pids.insert(tgid);
+
+            let thread_count = get_thread_count(tgid);
+            let cells = vec![
+                Cell::from(format!("{}", tgid)),  // LWPではなくTGIDを表示
+                Cell::from(truncate_string(&process.name().to_string_lossy(), 20)),
+                Cell::from(format!("{}", thread_count)),
+                Cell::from(format!("{:.2}", process.cpu_usage())),
+                Cell::from(format_bytes(process.memory())),
+                Cell::from(format_status(process.status())),
+            ];
+            Some(Row::new(cells).height(1))
+        });
 
     let table = Table::new(
         rows,
         [
-            Constraint::Length(8),
-            Constraint::Length(22),
-            Constraint::Length(10),
-            Constraint::Length(12),
-            Constraint::Length(15),
-        ],
+            Constraint::Length(8),   // PID
+            Constraint::Length(20),  // Name
+            Constraint::Length(8),   // Threads
+            Constraint::Length(10),  // CPU %
+            Constraint::Length(12),  // Memory
+            Constraint::Length(15),  // Status
+        ]
     )
         .header(header_row)
         .block(Block::default().borders(Borders::ALL).title("Processes"))
@@ -261,7 +291,7 @@ fn ui(f: &mut Frame, sys: &System, name: &str, sort_order: &SortOrder, min_memor
 
     f.render_widget(table, chunks[1]);
 
-    // フッター（変更なし）
+    // フッター
     let footer = Paragraph::new("Press 'q' or 'Esc' to quit")
         .style(Style::default().fg(Color::Gray))
         .block(Block::default().borders(Borders::ALL).title("Help"));

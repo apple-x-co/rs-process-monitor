@@ -102,15 +102,16 @@ Swap: 901.81 MB / 5.00 GB (17.6% used)
 
 === Process Information ===
 Processes matching 'httpd' (>= 11 MB) (sorted by Memory):
-Total: 146 process(es)
+Total: 4 process(es) (148 threads)
 Memory: 1.61 GB (Min: 11.02 MB, Avg: 11.27 MB, Max: 11.57 MB)
 CPU: 0.00%
 
-PID      Name                      CPU %    Memory       Status
----------------------------------------------------------------------------
-3612234 httpd                     0.00     11.57 MB     Sleep
-3612250 httpd                     0.00     11.57 MB     Sleep
-...
+PID      Name                      Threads  CPU %    Memory       Status
+----------------------------------------------------------------------------------
+4170992  httpd                     65       0.00     13.51 MB     Sleep
+4149852  httpd                     81       0.00     12.20 MB     Sleep
+4104475  httpd                     1        0.00     4.31 MB      Sleep
+4104476  httpd                     1        0.00     1.59 MB      Sleep
 ```
 
 ### TUIモード
@@ -120,15 +121,16 @@ PID      Name                      CPU %    Memory       Status
 │ Process Monitor: 'httpd' (>= 11 MB) | Sort: Memory              │
 │ System Memory: 397.27 MB / 769.15 MB (51.7% used, 371.88 MB ... │
 │ Swap: 901.81 MB / 5.00 GB (17.6% used)                          │
-│ Processes: 146 | CPU: 0.00%                                      │
+│ Processes: 4 (148 threads) | CPU: 0.00%                          │
 │ Memory: 1.61 GB (Min: 11.02 MB, Avg: 11.27 MB, Max: 11.57 MB)   │
 └──────────────────────────────────────────────────────────────────┘
 ┌─ Processes ──────────────────────────────────────────────────────┐
-│ PID      Name                 CPU %    Memory       Status       │
+│ PID      Name     Threads  CPU %    Memory       Status          │
 │ ──────────────────────────────────────────────────────────────── │
-│ 3612234  httpd                0.00     11.57 MB     Sleep        │
-│ 3612250  httpd                0.00     11.57 MB     Sleep        │
-│ ...                                                               │
+│ 4170992  httpd    65       0.00     13.51 MB     Sleep           │
+│ 4149852  httpd    81       0.00     12.20 MB     Sleep           │
+│ 4104475  httpd    1        0.00     4.31 MB      Sleep           │
+│ 4104476  httpd    1        0.00     1.59 MB      Sleep           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -198,11 +200,11 @@ rs-process-monitor --name httpd --watch 2 --tui --min-memory-mb 10 --sort memory
 
 - **言語**: Rust
 - **依存クレート**:
-    - `sysinfo` - システム情報取得
-    - `clap` - CLI引数パース
-    - `ratatui` - TUI構築
-    - `crossterm` - ターミナル制御
-    - `chrono` - 時刻処理
+  - `sysinfo` - システム情報取得
+  - `clap` - CLI引数パース
+  - `ratatui` - TUI構築
+  - `crossterm` - ターミナル制御
+  - `chrono` - 時刻処理
 
 ## 対応プラットフォーム
 

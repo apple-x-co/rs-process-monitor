@@ -1,5 +1,4 @@
-use sysinfo::ProcessStatus;
-use sysinfo::System;
+use sysinfo::{ProcessStatus, System};
 
 /// バイト数を見やすい単位に変換
 pub fn format_bytes(bytes: u64) -> String {
@@ -70,4 +69,63 @@ pub fn format_system_swap(sys: &System) -> String {
             usage_percent
         )
     }
+}
+
+/// プロセスのスレッド数を取得
+/// Linux: /proc/{pid}/status から Threads: の行を読む
+/// macOS: sysinfo ではスレッド数が取れないので 1 を返す
+#[cfg(target_os = "linux")]
+pub fn get_thread_count(pid: u32) -> usize {
+    use std::fs;
+
+    let status_path = format!("/proc/{}/status", pid);
+
+    if let Ok(content) = fs::read_to_string(&status_path) {
+        for line in content.lines() {
+            if line.starts_with("Threads:") {
+                if let Some(count_str) = line.split_whitespace().nth(1) {
+                    if let Ok(count) = count_str.parse::<usize>() {
+                        return count;
+                    }
+                }
+            }
+        }
+    }
+
+    // 取得できなかった場合は 1 を返す
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn get_thread_count(_pid: u32) -> usize {
+    // Linux以外ではスレッド数を取得できないので 1 を返す
+    1
+}
+
+/// プロセスの実際のPID（TGID）を取得
+#[cfg(target_os = "linux")]
+pub fn get_tgid(lwp: u32) -> u32 {
+    use std::fs;
+
+    let status_path = format!("/proc/{}/status", lwp);
+
+    if let Ok(content) = fs::read_to_string(&status_path) {
+        for line in content.lines() {
+            if line.starts_with("Tgid:") {
+                if let Some(tgid_str) = line.split_whitespace().nth(1) {
+                    if let Ok(tgid) = tgid_str.parse::<u32>() {
+                        return tgid;
+                    }
+                }
+            }
+        }
+    }
+
+    // 取得できなかった場合はlwpをそのまま返す
+    lwp
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn get_tgid(lwp: u32) -> u32 {
+    lwp
 }

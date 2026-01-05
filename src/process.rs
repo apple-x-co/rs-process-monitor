@@ -1,5 +1,6 @@
-use sysinfo::{System, Pid};
-use crate::formatter::{format_bytes, truncate_string, format_status, format_system_memory, format_system_swap};
+use crate::formatter::{format_bytes, format_status, format_system_memory, format_system_swap, get_tgid, get_thread_count, truncate_string};
+use std::collections::HashMap;
+use sysinfo::{Pid, System};
 
 /// ソート順の指定
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -77,6 +78,21 @@ pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder, 
     let total_memory: u64 = matching_processes.iter().map(|(_, p)| p.memory()).sum();
     let total_cpu: f32 = matching_processes.iter().map(|(_, p)| p.cpu_usage()).sum();
 
+    // スレッド数の集計
+    let mut pid_threads: HashMap<u32, usize> = HashMap::new();
+    for (_, process) in &matching_processes {
+        let lwp = process.pid().as_u32();
+        let tgid = get_tgid(lwp);  // 本当のPIDを取得
+
+        if !pid_threads.contains_key(&tgid) {
+            pid_threads.insert(tgid, get_thread_count(tgid));
+        }
+    }
+    let total_threads: usize = pid_threads.values().sum();
+
+    // 実際のプロセス数（ユニークなPID）
+    let actual_process_count = pid_threads.len();
+
     // メモリの統計値（Min/Avg/Max）
     let (min_memory, avg_memory, max_memory) = if total_count > 0 {
         let memories: Vec<u64> = matching_processes.iter().map(|(_, p)| p.memory()).collect();
@@ -101,7 +117,7 @@ pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder, 
     }
     println!(" (sorted by {:?}):", sort_order);
 
-    println!("Total: {} process(es)", total_count);
+    println!("Total: {} process(es) ({} threads)", actual_process_count, total_threads);
     println!("Memory: {} (Min: {}, Avg: {}, Max: {})",
              format_bytes(total_memory),
              format_bytes(min_memory),
@@ -110,15 +126,26 @@ pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder, 
     println!("CPU: {:.2}%\n", total_cpu);
 
     // 表のヘッダー
-    println!("{:<8} {:<25} {:<8} {:<12} {:<15}",
-             "PID", "Name", "CPU %", "Memory", "Status");
-    println!("{}", "-".repeat(75));
+    println!("{:<8} {:<25} {:<8} {:<8} {:<12} {:<15}",
+             "PID", "Name", "Threads", "CPU %", "Memory", "Status");
+    println!("{}", "-".repeat(82));
 
-    // 各プロセスの情報を表示
+    // ユニークなPIDだけを表示
+    let mut seen_pids = std::collections::HashSet::new();
     for (_, process) in matching_processes {
-        println!("{:<8} {:<25} {:<8.2} {:<12} {:<15}",
-                 process.pid(),
+        let lwp = process.pid().as_u32();
+        let tgid = get_tgid(lwp);  // 本当のPIDを取得
+
+        if seen_pids.contains(&tgid) {
+            continue;
+        }
+        seen_pids.insert(tgid);
+
+        let thread_count = get_thread_count(tgid);
+        println!("{:<8} {:<25} {:<8} {:<8.2} {:<12} {:<15}",
+                 tgid,  // LWPではなくTGIDを表示
                  truncate_string(&process.name().to_string_lossy(), 25),
+                 thread_count,
                  process.cpu_usage(),
                  format_bytes(process.memory()),
                  format_status(process.status()));
