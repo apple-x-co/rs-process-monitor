@@ -1,5 +1,7 @@
 use crate::formatter::{format_bytes, format_status, format_system_memory, format_system_swap, get_tgid, get_thread_count, truncate_string};
-use std::collections::HashMap;
+use crate::history::ProcessSnapshot;
+use chrono::Local;
+use std::collections::{HashMap, HashSet};
 use sysinfo::{Pid, System};
 
 /// ソート順の指定
@@ -150,4 +152,56 @@ pub fn show_processes_by_name(sys: &System, name: &str, sort_order: &SortOrder, 
                  format_bytes(process.memory()),
                  format_status(process.status()));
     }
+}
+
+/// プロセス情報のリストからスナップショットを生成
+///
+/// TGID でグループ化された後のユニークなプロセスのみを記録する
+pub fn create_snapshots(
+    sys: &System,
+    name: &str,
+    min_memory_mb: Option<u64>
+) -> Vec<ProcessSnapshot> {
+    let min_memory_bytes = min_memory_mb.map(|mb| mb * 1024 * 1024);
+    let timestamp = Local::now();
+
+    // 既存のフィルタリング処理を再利用
+    let matching_processes: Vec<_> = sys.processes()
+        .iter()
+        .filter(|(_, p)| {
+            let matches_name = p.name().to_string_lossy().contains(name);
+            let meets_min_memory = if let Some(min_bytes) = min_memory_bytes {
+                p.memory() >= min_bytes
+            } else {
+                true
+            };
+            matches_name && meets_min_memory
+        })
+        .collect();
+
+    // TGID でグループ化（既存の処理と同じ）
+    let mut seen_pids = HashSet::new();
+    let mut snapshots = Vec::new();
+
+    for (_, process) in matching_processes {
+        let lwp = process.pid().as_u32();
+        let tgid = get_tgid(lwp);
+
+        if seen_pids.contains(&tgid) {
+            continue;
+        }
+        seen_pids.insert(tgid);
+
+        snapshots.push(ProcessSnapshot {
+            timestamp,
+            process_name: process.name().to_string_lossy().to_string(),
+            pid: tgid,
+            cpu_usage: process.cpu_usage(),
+            memory_bytes: process.memory(),
+            thread_count: get_thread_count(tgid),
+            status: process.status(),
+        });
+    }
+
+    snapshots
 }

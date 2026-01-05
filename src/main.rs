@@ -2,6 +2,7 @@ mod formatter;
 mod process;
 mod monitor;
 mod tui;
+mod history;
 
 use clap::Parser;
 use sysinfo::{System, ProcessesToUpdate};
@@ -36,6 +37,10 @@ struct Args {
     /// 最小メモリ使用量でフィルタ（MB単位、指定値未満のプロセスを除外）
     #[arg(long)]
     min_memory_mb: Option<u64>,
+
+    /// 履歴をSQLiteに記録（watch/tuiモードのみ）
+    #[arg(short, long)]
+    log: Option<String>,
 }
 
 fn main() {
@@ -46,7 +51,7 @@ fn main() {
         if args.tui {
             // TUIモード
             if let Some(name) = &args.name {
-                if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb) {
+                if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb, args.log.as_deref()) {
                     eprintln!("Error running TUI: {}", e);
                     std::process::exit(1);
                 }
@@ -61,6 +66,7 @@ fn main() {
                 name: args.name.as_deref(),
                 sort: &args.sort,
                 min_memory_mb: args.min_memory_mb,
+                log_path: args.log.as_deref(),
             };
             watch_mode(monitor_args, interval);
         }

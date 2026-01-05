@@ -1,5 +1,6 @@
 use crate::formatter::{format_bytes, format_status, format_system_memory, format_system_swap, get_thread_count, get_tgid, truncate_string};
-use crate::process::SortOrder;
+use crate::process::{SortOrder, create_snapshots};
+use crate::history::ProcessHistory;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -21,14 +22,28 @@ pub struct TuiApp {
     should_quit: bool,
     last_update: Instant,
     update_interval: Duration,
+    history: Option<ProcessHistory>,
 }
 
 impl TuiApp {
-    pub fn new(interval_secs: u64) -> Self {
+    pub fn new(interval_secs: u64, log_path: Option<&str>) -> Self {
+        let history = if let Some(path) = log_path {
+            match ProcessHistory::new(path) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    eprintln!("Warning: Failed to initialize history database: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             should_quit: false,
             last_update: Instant::now(),
             update_interval: Duration::from_secs(interval_secs),
+            history,
         }
     }
 
@@ -47,6 +62,7 @@ pub fn run_tui(
     sort_order: &SortOrder,
     interval_secs: u64,
     min_memory_mb: Option<u64>,
+    log_path: Option<&str>,
 ) -> Result<(), io::Error> {
     // ターミナルの初期化
     enable_raw_mode()?;
@@ -56,7 +72,7 @@ pub fn run_tui(
     let mut terminal = Terminal::new(backend)?;
 
     // アプリの実行
-    let mut app = TuiApp::new(interval_secs);
+    let mut app = TuiApp::new(interval_secs, log_path);
     let mut sys = System::new_all();
 
     let res = run_app(&mut terminal, &mut app, &mut sys, name, sort_order, min_memory_mb);
@@ -90,6 +106,14 @@ fn run_app(
         if app.should_update() {
             sys.refresh_processes(ProcessesToUpdate::All, true);
             app.mark_updated();
+
+            // 履歴記録
+            if let Some(ref mut hist) = app.history {
+                let snapshots = create_snapshots(sys, name, min_memory_mb);
+                if let Err(_e) = hist.insert_snapshots(&snapshots) {
+                    // TUI では eprintln! が画面を壊すので無視
+                }
+            }
         }
 
         // 画面描画

@@ -155,6 +155,132 @@ PID      Name     Threads  CPU %    Memory       Status
 - 各プロセスのスレッド構成が一目瞭然
 - マルチスレッドプロセスの監視に最適化
 
+### Phase 6: データの永続化（履歴記録機能）（2026-01-05）
+
+#### 背景と目的
+
+Phase 5 までで監視機能は完成したが、データの蓄積と分析機能が欠けていた。実務では：
+- 過去のメモリ使用パターンを分析したい
+- 特定時刻のメモリスパイクを調査したい
+- 長期的なトレンドを把握したい
+
+そこで、SQLite を使った履歴記録機能を実装することにした。
+
+#### 実装内容（Phase 5-1: 履歴記録のみ）
+
+**新規モジュール `src/history.rs`**:
+- `ProcessSnapshot` 構造体: 1つのプロセスの記録単位
+  - タイムスタンプ（ISO 8601形式）
+  - プロセス名、PID、CPU使用率、メモリ使用量
+  - スレッド数、ステータス
+- `ProcessHistory` 構造体: SQLite データベース管理
+  - データベース初期化とスキーマ作成
+  - トランザクションによる一括挿入
+
+**データベース設計**:
+```sql
+CREATE TABLE process_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    process_name TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    cpu_usage REAL NOT NULL,
+    memory_bytes INTEGER NOT NULL,
+    thread_count INTEGER NOT NULL,
+    status TEXT NOT NULL
+);
+
+-- パフォーマンス最適化のためのインデックス
+CREATE INDEX idx_timestamp ON process_snapshots(timestamp);
+CREATE INDEX idx_pid ON process_snapshots(pid);
+CREATE INDEX idx_process_name ON process_snapshots(process_name);
+```
+
+**既存モジュールへの統合**:
+1. `src/process.rs`: `create_snapshots()` 関数追加
+   - 既存のフィルタリング処理を再利用
+   - TGID でグループ化してユニークなプロセスのみ記録
+2. `src/monitor.rs`: watch モードに履歴記録統合
+   - `MonitorArgs` に `log_path` フィールド追加
+   - ループ内でスナップショット記録
+3. `src/tui.rs`: TUI モードに履歴記録統合
+   - `TuiApp` に `history` フィールド追加
+   - 更新タイミングで記録
+4. `src/main.rs`: `--log` オプション追加
+
+**依存クレート追加**:
+```toml
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+```
+- `bundled`: SQLite をバンドル（システム依存を回避）
+- `chrono`: `DateTime<Local>` を直接保存可能
+
+**エラーハンドリング戦略**:
+- 履歴記録は補助機能なので、失敗してもメイン機能（監視）は継続
+- DB初期化失敗時: 警告表示 + 続行
+- スナップショット挿入失敗（watch）: 警告表示 + 続行
+- スナップショット挿入失敗（TUI）: 無視（`eprintln!` が画面を壊すため）
+
+#### 使用例
+
+```bash
+# watch モードで履歴記録
+rs-process-monitor --name httpd --watch 2 --log /tmp/httpd_history.db
+
+# TUI モードで履歴記録
+rs-process-monitor --name httpd --watch 2 --tui --log /tmp/httpd_history.db
+
+# DB の確認
+sqlite3 /tmp/httpd_history.db "SELECT * FROM process_snapshots ORDER BY timestamp DESC LIMIT 10;"
+
+# プロセスごとの平均メモリ
+SELECT pid, process_name, AVG(memory_bytes)/1024/1024 as avg_mb
+FROM process_snapshots
+GROUP BY pid
+ORDER BY avg_mb DESC;
+```
+
+#### 動作確認結果
+
+- ✅ DB ファイル作成成功
+- ✅ タイムスタンプ付きデータの記録（ISO 8601形式）
+- ✅ TGID グループ化されたプロセスのみ記録
+- ✅ トランザクションによる一括挿入
+- ✅ インデックス作成確認
+- ✅ watch モードと TUI モード両方で動作
+- ✅ コンパイル警告なし
+
+#### 学び
+
+**設計パターン**:
+- 既存の `MonitorArgs` パターンを踏襲（構造体による引数グループ化）
+- 参照中心の設計を維持（`log_path: Option<&'a str>`）
+- エラーハンドリングを既存コードと統一（`Result<T, rusqlite::Error>`）
+
+**Rust の機能**:
+- 可変参照の必要性（`&mut self` for `insert_snapshots()`）
+- `Option<ProcessHistory>` でオプショナルな機能を実装
+- `ref mut` パターンで可変借用
+
+**データベース設計**:
+- トランザクションでパフォーマンス最適化
+- インデックスでクエリ性能確保
+- タイムスタンプを ISO 8601 形式で統一
+
+#### 次のステップ（Phase 5-2: 分析機能）
+
+履歴記録機能が完成したので、次は分析機能の実装が可能：
+1. `analyze` サブコマンドの追加
+2. 時間範囲指定でのデータ抽出
+3. 統計情報の計算（Min/Avg/Max、トレンド分析）
+4. ピーク値の特定と時刻の表示
+5. CSV/JSON エクスポート機能
+
+**実装優先順位**:
+- ✅ Phase 5-1: 履歴記録（完了）
+- ⏭️ Phase 5-2: 分析機能（次回）
+- 🔜 Phase 7-4: グラフ表示（TUI での可視化）
+
 ## 🔍 実務での発見
 
 このツールを使って、以下の重大な問題を発見:
@@ -232,56 +358,57 @@ Apache設定の調査は別途継続。優先度の高い調査項目:
 - [x] リアルタイム監視（任意の間隔）
 - [x] クロスプラットフォーム対応（macOS/Linux）
 
+#### データ永続化機能（Phase 6）
+- [x] 履歴記録（SQLite）- watch/TUI モードでプロセス情報を記録
+- [x] タイムスタンプ付きスナップショット（ISO 8601形式）
+- [x] トランザクションによる一括挿入
+- [x] インデックスによるクエリ最適化
+- [ ] 分析コマンド（analyze サブコマンド）- 次回実装予定
+- [ ] グラフ表示（TUI での可視化）- 将来実装予定
+
 ## 🚀 次のステップ（優先順位順）
 
-### Phase 5: データの永続化と分析（推奨度: ★★★）
+### ~~Phase 5-1: データの永続化（履歴記録）~~ ✅ 完了（2026-01-05）
 
-#### 機能1: 履歴記録
-```bash
-// SQLite にデータを保存
-rs-process-monitor --name httpd --log history.db --watch 60
-```
+履歴記録機能は実装完了。詳細は「Phase 6: データの永続化（履歴記録機能）」セクション参照。
 
-**実装内容**:
-- SQLiteでタイムスタンプ付きデータを保存
-- テーブル設計:
-  ```sql
-  CREATE TABLE process_history (
-    id INTEGER PRIMARY KEY,
-    timestamp DATETIME,
-    process_name TEXT,
-    pid INTEGER,
-    cpu_usage REAL,
-    memory_bytes INTEGER,
-    status TEXT
-  );
-  ```
+### Phase 5-2: データ分析機能（推奨度: ★★★）
 
-**メリット**:
-- 過去のメモリ使用パターンを分析
-- 特定時刻のメモリスパイクを調査
-- グラフ化のためのデータ蓄積
+Phase 5-1 で履歴記録機能が完成したので、次は分析機能の実装。
 
-**依存クレート**:
-- `rusqlite` または `sqlx`
+#### 使用例
 
-#### 機能2: 履歴分析コマンド
 ```bash
 # 過去1日のデータを分析
 rs-process-monitor analyze --log history.db --since "1 day ago"
 
 # 特定時間帯のピーク値
-rs-process-monitor analyze --log history.db --from "2025-12-20 14:00" --to "2025-12-20 16:00"
+rs-process-monitor analyze --log history.db --from "2026-01-05 14:00" --to "2026-01-05 16:00"
 ```
+
+#### 実装内容
+
+**新規サブコマンド `analyze`**:
+- 時間範囲指定でのデータ抽出
+- 統計情報の計算（Min/Avg/Max）
+- ピーク値の特定と時刻の表示
+- プロセスごとのトレンド分析
 
 **出力例**:
 ```
-Analysis from 2025-12-20 14:00 to 16:00:
-  Peak Memory: 2.1 GB at 14:32
+Analysis from 2026-01-05 14:00 to 16:00:
+  Peak Memory: 2.1 GB at 14:32 (PID: 4170992)
   Avg Memory: 1.6 GB
+  Min Memory: 1.2 GB
   Peak CPU: 45% at 15:15
   Process Count Range: 140-160
+  Total Records: 7200
 ```
+
+**拡張機能**:
+- CSV/JSON エクスポート機能
+- グラフ化用データの出力
+- プロセスごとの詳細分析
 
 ### Phase 6: アラート機能（推奨度: ★★☆）
 
@@ -400,12 +527,13 @@ rs-process-monitor --name httpd --verbose
 このプロジェクトで学んだこと:
 
 ### Rustの技術
-- クレートの選定と使い方（`sysinfo`, `clap`, `ratatui`等）
+- クレートの選定と使い方（`sysinfo`, `clap`, `ratatui`, `rusqlite`等）
 - モジュール分割とコード設計
 - エラーハンドリングのベストプラクティス
-- 所有権・借用の実践的な活用
+- 所有権・借用の実践的な活用（`&mut self`, `ref mut`パターン）
 - イテレータとクロージャの使いこなし
 - 条件付きコンパイル（`#[cfg(target_os = "linux")]`）
+- `Option<T>` によるオプショナルな機能の実装
 
 ### システムプログラミング
 - プロセス情報の取得方法
@@ -414,6 +542,13 @@ rs-process-monitor --name httpd --verbose
 - メモリ管理（RSS, VSZ, 共有メモリ）
 - LWP（Light Weight Process）と TGID（Thread Group ID）の違い
 - Linux のスレッド実装とスレッドモデル
+
+### データベース設計
+- SQLite の基本操作（rusqlite クレート）
+- トランザクションによるパフォーマンス最適化
+- インデックス設計とクエリ最適化
+- タイムスタンプの扱い（ISO 8601形式）
+- データの永続化と分析の分離
 
 ### 実務スキル
 - 要件から設計、実装、テストまでの一連の流れ
@@ -435,11 +570,17 @@ rs-process-monitor --name httpd --verbose
 ## 🎯 実装の優先順位
 
 すぐに実装すべき（次回開発時）:
-1. ✅ **履歴記録機能**（Phase 5-1, 5-2）
-   - データ蓄積と分析は実務で最も価値がある
-   - SQLite なら軽量で依存が少ない
+1. ✅ **履歴記録機能**（Phase 5-1）- **完了（2026-01-05）**
+   - SQLite によるデータ蓄積機能を実装
+   - watch/TUI モードでリアルタイム記録
+   - トランザクションとインデックスでパフォーマンス最適化
 
-2. ✅ **設定ファイル対応**（Phase 8）
+2. 🔜 **分析機能**（Phase 5-2）- **次回実装**
+   - `analyze` サブコマンドの追加
+   - 時間範囲指定でのデータ抽出と統計分析
+   - CSV/JSON エクスポート機能
+
+3. **設定ファイル対応**（Phase 8）
    - よく使うオプションの組み合わせを保存
    - UX向上につながる
 
@@ -458,6 +599,7 @@ rs-process-monitor --name httpd --verbose
 - [sysinfo crate](https://docs.rs/sysinfo/)
 - [ratatui book](https://ratatui.rs/)
 - [clap documentation](https://docs.rs/clap/)
+- [rusqlite documentation](https://docs.rs/rusqlite/)
 
 ### 類似ツール
 - `htop` - インタラクティブなプロセスビューア
@@ -472,17 +614,25 @@ rs-process-monitor --name httpd --verbose
 - Apache/PHP-FPMのメモリ問題を可視化
 - スワップ発生を発見
 - メモリ設定の最適化に必要なデータを取得
+- **Phase 6で履歴記録機能を実装**（2026-01-05）
 
 **Rustの学習**:
-- 7つ目のRustプロジェクトとして、クレートの使い方やTUI実装など、新しい技術を習得
+- 8つのフェーズを通じて、クレートの使い方やTUI実装、データベース操作など、実践的な技術を習得
+- rusqlite による SQLite 操作
+- 可変参照と借用の理解を深める
+- オプショナルな機能の実装パターン
 
 **今後**:
-- 履歴記録機能の追加が最も価値が高い
+- ✅ Phase 5-1（履歴記録機能）完了
+- 🔜 Phase 5-2（分析機能）が次の目標
 - 設定ファイル対応でUX向上
 - Apache設定問題は別途調査
 
 ---
 
-**開発期間**: 2025年12月29日  
-**作成者**: [@apple-x-co](https://github.com/apple-x-co)  
+**開発期間**:
+- Phase 1-5: 2025年12月29日
+- Phase 6: 2026年1月5日
+
+**作成者**: [@apple-x-co](https://github.com/apple-x-co)
 **Claude対話**: Claude Sonnet 4.5

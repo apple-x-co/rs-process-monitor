@@ -1,6 +1,6 @@
 [package]
 name = "rs-process-monitor"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -9,3 +9,4 @@ sysinfo = "0.37.2"
 chrono = "0.4.42"
 ratatui = "0.30.0"
 crossterm = "0.29.0"
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }

@@ -27,6 +27,7 @@
 - PID指定での詳細表示
 - 最小メモリフィルタ（小さいプロセスを除外）
 - リアルタイム監視（任意の更新間隔）
+- **履歴記録機能（SQLite）**: プロセス情報をデータベースに記録
 
 ## インストール
 
@@ -90,6 +91,40 @@ rs-process-monitor --name httpd --watch 2 --tui --sort cpu
 ### TUIモードの操作
 
 - `q` または `Esc`: 終了
+
+### 履歴記録機能（SQLite）
+
+```bash
+# watch モードで履歴記録
+rs-process-monitor --name httpd --watch 2 --log /tmp/httpd_history.db
+
+# TUI モードで履歴記録
+rs-process-monitor --name httpd --watch 2 --tui --log /tmp/httpd_history.db
+
+# 最小メモリフィルタと併用
+rs-process-monitor --name httpd --watch 5 --min-memory-mb 10 --log /tmp/httpd_history.db
+```
+
+### データベースの確認
+
+```bash
+# SQLite CLI でデータを確認
+sqlite3 /tmp/httpd_history.db
+
+# 最新10件を表示
+SELECT * FROM process_snapshots ORDER BY timestamp DESC LIMIT 10;
+
+# プロセスごとの平均メモリ使用量
+SELECT pid, process_name, AVG(memory_bytes)/1024/1024 as avg_mb
+FROM process_snapshots
+GROUP BY pid
+ORDER BY avg_mb DESC;
+
+# 時間範囲指定でのデータ抽出
+SELECT * FROM process_snapshots
+WHERE timestamp >= '2026-01-05T00:00:00'
+ORDER BY timestamp;
+```
 
 ## 出力例
 
@@ -157,6 +192,9 @@ Options:
       --min-memory-mb <MIN_MEMORY_MB>
           最小メモリ使用量でフィルタ（MB単位、指定値未満のプロセスを除外）
 
+  -l, --log <LOG>
+          履歴をSQLiteに記録（watch/tuiモードのみ）
+
   -h, --help
           ヘルプを表示
 
@@ -205,6 +243,7 @@ rs-process-monitor --name httpd --watch 2 --tui --min-memory-mb 10 --sort memory
   - `ratatui` - TUI構築
   - `crossterm` - ターミナル制御
   - `chrono` - 時刻処理
+  - `rusqlite` - SQLite データベース（履歴記録）
 
 ## 対応プラットフォーム
 
