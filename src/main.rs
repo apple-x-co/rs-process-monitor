@@ -3,16 +3,75 @@ mod process;
 mod monitor;
 mod tui;
 mod history;
+mod analyze;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use sysinfo::{System, ProcessesToUpdate};
 use process::{SortOrder, show_process_by_pid, show_processes_by_name};
 use monitor::{watch_mode, MonitorArgs};
+use analyze::OutputFormat;
 
 /// プロセス監視ツール
 #[derive(Parser, Debug)]
 #[command(name = "rs-process-monitor")]
-#[command(about = "A simple process monitoring tool", long_about = None)]
+#[command(about = "A process monitoring and analysis tool", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    #[command(flatten)]
+    monitor_args: Args,
+}
+
+/// サブコマンド
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Analyze historical process data
+    Analyze(AnalyzeArgs),
+}
+
+/// analyze サブコマンドの引数
+#[derive(Parser, Debug)]
+struct AnalyzeArgs {
+    /// Path to history database
+    #[arg(long, required = true)]
+    log: String,
+
+    /// Filter by process name
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Start time (ISO 8601: 2026-01-05T14:00:00+09:00)
+    #[arg(long)]
+    from: Option<String>,
+
+    /// End time (ISO 8601: 2026-01-05T16:00:00+09:00)
+    #[arg(long)]
+    to: Option<String>,
+
+    /// Output format
+    #[arg(long, default_value = "table", value_enum)]
+    format: OutputFormatArg,
+}
+
+/// 出力フォーマット（CLI引数用）
+#[derive(Clone, Debug, clap::ValueEnum)]
+enum OutputFormatArg {
+    Table,
+    Json,
+}
+
+impl From<OutputFormatArg> for OutputFormat {
+    fn from(arg: OutputFormatArg) -> Self {
+        match arg {
+            OutputFormatArg::Table => OutputFormat::Table,
+            OutputFormatArg::Json => OutputFormat::Json,
+        }
+    }
+}
+
+/// 監視モードの引数
+#[derive(Parser, Debug)]
 struct Args {
     /// 監視するプロセスのPID
     #[arg(short, long, conflicts_with = "name")]
@@ -44,35 +103,57 @@ struct Args {
 }
 
 fn main() {
-    let args = Args::parse();
+    let cli = Cli::parse();
 
-    // リアルタイム監視モードの場合
-    if let Some(interval) = args.watch {
-        if args.tui {
-            // TUIモード
-            if let Some(name) = &args.name {
-                if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb, args.log.as_deref()) {
-                    eprintln!("Error running TUI: {}", e);
-                    std::process::exit(1);
-                }
-            } else {
-                eprintln!("Error: TUI mode requires --name option");
+    // サブコマンドのルーティング
+    match cli.command {
+        Some(Commands::Analyze(analyze_args)) => {
+            // analyze サブコマンド
+            let format: OutputFormat = analyze_args.format.into();
+            if let Err(e) = analyze::run_analyze(
+                &analyze_args.log,
+                analyze_args.name.as_deref(),
+                analyze_args.from.as_deref(),
+                analyze_args.to.as_deref(),
+                &format,
+            ) {
+                eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
-        } else {
-            // 通常の監視モード
-            let monitor_args = MonitorArgs {
-                pid: args.pid,
-                name: args.name.as_deref(),
-                sort: &args.sort,
-                min_memory_mb: args.min_memory_mb,
-                log_path: args.log.as_deref(),
-            };
-            watch_mode(monitor_args, interval);
         }
-    } else {
-        // 通常モード（1回だけ表示）
-        single_shot_mode(&args);
+        None => {
+            // サブコマンドなし: 既存の監視モード
+            let args = &cli.monitor_args;
+
+            // リアルタイム監視モードの場合
+            if let Some(interval) = args.watch {
+                if args.tui {
+                    // TUIモード
+                    if let Some(name) = &args.name {
+                        if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb, args.log.as_deref()) {
+                            eprintln!("Error running TUI: {}", e);
+                            std::process::exit(1);
+                        }
+                    } else {
+                        eprintln!("Error: TUI mode requires --name option");
+                        std::process::exit(1);
+                    }
+                } else {
+                    // 通常の監視モード
+                    let monitor_args = MonitorArgs {
+                        pid: args.pid,
+                        name: args.name.as_deref(),
+                        sort: &args.sort,
+                        min_memory_mb: args.min_memory_mb,
+                        log_path: args.log.as_deref(),
+                    };
+                    watch_mode(monitor_args, interval);
+                }
+            } else {
+                // 通常モード（1回だけ表示）
+                single_shot_mode(args);
+            }
+        }
     }
 }
 

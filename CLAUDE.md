@@ -267,19 +267,186 @@ ORDER BY avg_mb DESC;
 - インデックスでクエリ性能確保
 - タイムスタンプを ISO 8601 形式で統一
 
-#### 次のステップ（Phase 5-2: 分析機能）
+### Phase 7: データ分析機能（2026-01-06）
 
-履歴記録機能が完成したので、次は分析機能の実装が可能：
-1. `analyze` サブコマンドの追加
-2. 時間範囲指定でのデータ抽出
-3. 統計情報の計算（Min/Avg/Max、トレンド分析）
-4. ピーク値の特定と時刻の表示
-5. CSV/JSON エクスポート機能
+#### 背景と目的
+
+Phase 6 で履歴記録機能が完成したので、次は蓄積されたデータの分析機能を実装した。実務では：
+- 過去のメモリ使用パターンを分析したい
+- ピーク時のメモリとCPU使用率を特定したい
+- JSON形式でエクスポートして他のツールと連携したい
+
+#### 実装内容
+
+**新規サブコマンド `analyze`**:
+- 履歴データベースからデータをクエリして統計分析
+- オプションのフィルタ: 時間範囲（--from, --to）、プロセス名（--name）
+- 出力形式: Table（デフォルト）、JSON
+
+**新規モジュール `src/analyze.rs`**:
+- `AnalysisResult` 構造体: 統計結果を保持（Serialize対応）
+  - `TimeRange`: 分析対象の時間範囲
+  - `MemoryStats`: メモリの Min/Avg/Max
+  - `CpuStats`: CPUの Min/Avg/Max
+  - `ProcessCountStats`: プロセス数の範囲と平均
+  - `PeakDetail`: ピーク値の詳細（タイムスタンプ、PID、プロセス名）
+- `run_analyze()`: エントリーポイント
+  - データベース存在確認
+  - タイムスタンプ検証（ISO 8601形式）
+  - データクエリ
+  - 統計計算
+  - 出力（Table or JSON）
+- `AnalysisResult::from_snapshots()`: 統計計算ロジック
+  - メモリとCPUの Min/Avg/Max
+  - タイムスタンプごとのユニークなPID数をカウント
+  - ピーク値とその発生時刻を特定
+- `print_table()`: テーブル形式の出力
+  - 既存の `formatter::format_bytes()` を再利用
+  - 時間範囲、フィルタ、統計、ピーク詳細を表示
+- `print_json()`: JSON形式の出力
+  - `serde_json` で整形出力
+
+**`src/history.rs` への追加**:
+- `query_snapshots()` メソッド
+  - オプショナルなフィルタ（from, to, name）でWHERE句を動的構築
+  - LIKE パターンでプロセス名検索
+  - RFC3339 文字列を `DateTime<Local>` に変換
+- `row_to_snapshot()`: SQLの行を `ProcessSnapshot` に変換
+- `parse_status()`: ステータス文字列を `ProcessStatus` enum に変換
+
+**CLI構造の変更（`src/main.rs`）**:
+- サブコマンドサポートを追加
+  - `Commands` enum: `Analyze(AnalyzeArgs)`
+  - `Cli` struct: `Option<Commands>` + flatten された監視モード引数
+  - **重要**: `Option<Commands>` により後方互換性を維持
+    - サブコマンドなし: 既存の監視モード
+    - `analyze`: 新しい分析機能
+- `AnalyzeArgs` struct:
+  - `--log` (必須): データベースパス
+  - `--name` (オプション): プロセス名フィルタ
+  - `--from` / `--to` (オプション): ISO 8601形式の時間範囲
+  - `--format` (デフォルト: table): 出力形式
+- `OutputFormatArg` enum: CLI引数用の enum（ValueEnum derive）
+
+**依存クレート追加**:
+```toml
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+```
+
+#### 使用例
+
+```bash
+# 全データの分析
+rs-process-monitor analyze --log /tmp/httpd_history.db
+
+# プロセス名でフィルタ
+rs-process-monitor analyze --log /tmp/httpd_history.db --name httpd
+
+# JSON形式で出力
+rs-process-monitor analyze --log /tmp/httpd_history.db --format json
+
+# 時間範囲指定（ISO 8601形式）
+rs-process-monitor analyze --log /tmp/httpd_history.db \
+  --from "2026-01-05T14:00:00+09:00" \
+  --to "2026-01-05T16:00:00+09:00"
+```
+
+#### 出力例（Table形式）
+
+```
+======================================================================
+Analysis Report
+======================================================================
+
+Time Range:
+  From: 2026-01-06T17:10:11.980145+09:00
+  To:   2026-01-06T17:10:21.164810+09:00
+
+Memory Statistics:
+  Min:  8.95 MB
+  Avg:  9.33 MB
+  Max:  9.41 MB
+
+CPU Statistics:
+  Min:  0.15%
+  Avg:  1.39%
+  Max:  1.83%
+
+Process Count:
+  Range: 1-1
+  Avg:   1.0
+
+Peak Details:
+  Memory Peak: 9.41 MB at 2026-01-06T17:10:21.164810+09:00 (PID: 82886, rs-process-monitor)
+  CPU Peak: 1.83% at 2026-01-06T17:10:16.064066+09:00 (PID: 82886, rs-process-monitor)
+
+Total Records: 10
+======================================================================
+```
+
+#### 動作確認結果
+
+- ✅ サブコマンド `analyze` の追加
+- ✅ データベースクエリ（オプショナルフィルタ対応）
+- ✅ 統計計算（Min/Avg/Max for メモリ・CPU・プロセス数）
+- ✅ ピーク値の特定（タイムスタンプ、PID、プロセス名）
+- ✅ Table形式出力（既存のformatter再利用）
+- ✅ JSON形式出力（serde_json）
+- ✅ エラーハンドリング（DB不存在、無効なタイムスタンプ）
+- ✅ 後方互換性の維持（既存コマンドが動作）
+- ✅ コンパイル警告なし
+
+#### 学び
+
+**設計パターン**:
+- サブコマンドの追加と後方互換性の両立
+  - `Option<Commands>` により、サブコマンドなしの場合は既存動作
+  - `#[command(flatten)]` で既存の引数を維持
+- CLI引数用とロジック用でenumを分ける
+  - `OutputFormatArg` (clap::ValueEnum) → `OutputFormat` (analyze.rs)
+  - From trait で変換
+
+**Rust の機能**:
+- `#[derive(Serialize)]` で構造体を簡単にJSON化
+- `match params.len()` でSQLパラメータ数に応じた分岐
+- `DateTime::parse_from_rfc3339()` でRFC3339文字列をパース
+- `with_timezone(&chrono::Local)` でタイムゾーン変換
+
+**SQL と Rust の役割分担**:
+- SQL: フィルタリング（WHERE句）とソート（ORDER BY）
+- Rust: 統計計算とピーク検出
+  - より柔軟な処理が可能
+  - テストしやすい
+  - コンテキスト情報（タイムスタンプ、PID）を保持
+
+**エラーハンドリングのベストプラクティス**:
+- ユーザーフレンドリーなエラーメッセージ
+  - "Database file not found: /path/to/db"
+  - "Invalid timestamp format: 'xxx'. Expected ISO 8601 (e.g., ...)"
+- トラブルシューティングのヒントを提供
+  - "Try: - Widening the time range - Checking the process name filter"
+
+**タイムスタンプの扱い**:
+- データベース: RFC3339形式のTEXT
+- ProcessSnapshot: `DateTime<Local>`
+- ユーザー入力: ISO 8601形式の文字列
+- クエリ時にパース・変換が必要
+
+#### 次のステップ
 
 **実装優先順位**:
-- ✅ Phase 5-1: 履歴記録（完了）
-- ⏭️ Phase 5-2: 分析機能（次回）
-- 🔜 Phase 7-4: グラフ表示（TUI での可視化）
+- ✅ Phase 5-1: 履歴記録（完了: 2026-01-05）
+- ✅ Phase 5-2: 分析機能（完了: 2026-01-06）
+- 🔜 Phase 6: アラート機能（閾値監視とWebhook通知）
+- 🔜 Phase 7: グラフ表示（TUI での可視化）
+- 🔜 Phase 8: 設定ファイル対応（プロファイル管理）
+
+**今後の拡張案**:
+1. **CSV エクスポート** - スプレッドシートでの分析
+2. **相対時間指定** - "--since '1 day ago'" のようなパース
+3. **トレンド分析** - 時系列での変化を検出
+4. **グラフ化** - ASCII art または TUI でのグラフ表示
 
 ## 🔍 実務での発見
 
@@ -363,7 +530,19 @@ Apache設定の調査は別途継続。優先度の高い調査項目:
 - [x] タイムスタンプ付きスナップショット（ISO 8601形式）
 - [x] トランザクションによる一括挿入
 - [x] インデックスによるクエリ最適化
-- [ ] 分析コマンド（analyze サブコマンド）- 次回実装予定
+
+#### データ分析機能（Phase 7）
+- [x] analyze サブコマンド - 履歴データの統計分析
+- [x] 時間範囲フィルタ（--from, --to）- ISO 8601形式
+- [x] プロセス名フィルタ（--name）
+- [x] メモリ・CPU統計（Min/Avg/Max）
+- [x] プロセス数統計（Range/Avg）
+- [x] ピーク値の特定（タイムスタンプ、PID、プロセス名）
+- [x] Table形式出力（既存formatter再利用）
+- [x] JSON形式出力（他ツールとの連携）
+- [x] エラーハンドリング（ユーザーフレンドリーなメッセージ）
+- [x] 後方互換性の維持（既存コマンド動作保証）
+- [ ] CSV形式出力 - 将来実装予定
 - [ ] グラフ表示（TUI での可視化）- 将来実装予定
 
 ## 🚀 次のステップ（優先順位順）
@@ -372,43 +551,23 @@ Apache設定の調査は別途継続。優先度の高い調査項目:
 
 履歴記録機能は実装完了。詳細は「Phase 6: データの永続化（履歴記録機能）」セクション参照。
 
-### Phase 5-2: データ分析機能（推奨度: ★★★）
+### ~~Phase 5-2: データ分析機能~~ ✅ 完了（2026-01-06）
 
-Phase 5-1 で履歴記録機能が完成したので、次は分析機能の実装。
+分析機能は実装完了。詳細は「Phase 7: データ分析機能」セクション参照。
 
-#### 使用例
+**実装した機能**:
+- ✅ analyze サブコマンド
+- ✅ 時間範囲フィルタ（--from, --to）
+- ✅ プロセス名フィルタ（--name）
+- ✅ 統計情報（メモリ・CPU・プロセス数の Min/Avg/Max）
+- ✅ ピーク値の特定（タイムスタンプ、PID、プロセス名）
+- ✅ Table / JSON 形式出力
+- ✅ 後方互換性の維持
 
-```bash
-# 過去1日のデータを分析
-rs-process-monitor analyze --log history.db --since "1 day ago"
-
-# 特定時間帯のピーク値
-rs-process-monitor analyze --log history.db --from "2026-01-05 14:00" --to "2026-01-05 16:00"
-```
-
-#### 実装内容
-
-**新規サブコマンド `analyze`**:
-- 時間範囲指定でのデータ抽出
-- 統計情報の計算（Min/Avg/Max）
-- ピーク値の特定と時刻の表示
-- プロセスごとのトレンド分析
-
-**出力例**:
-```
-Analysis from 2026-01-05 14:00 to 16:00:
-  Peak Memory: 2.1 GB at 14:32 (PID: 4170992)
-  Avg Memory: 1.6 GB
-  Min Memory: 1.2 GB
-  Peak CPU: 45% at 15:15
-  Process Count Range: 140-160
-  Total Records: 7200
-```
-
-**拡張機能**:
-- CSV/JSON エクスポート機能
-- グラフ化用データの出力
-- プロセスごとの詳細分析
+**今後の拡張案**:
+- CSV エクスポート機能
+- 相対時間指定（"1 day ago"）
+- トレンド分析（時系列での変化検出）
 
 ### Phase 6: アラート機能（推奨度: ★★☆）
 
