@@ -4,12 +4,13 @@ mod monitor;
 mod tui;
 mod history;
 mod analyze;
+mod graph;
 
-use clap::{Parser, Subcommand};
-use sysinfo::{System, ProcessesToUpdate};
-use process::{SortOrder, show_process_by_pid, show_processes_by_name};
-use monitor::{watch_mode, MonitorArgs};
 use analyze::OutputFormat;
+use clap::{Parser, Subcommand};
+use monitor::{watch_mode, MonitorArgs};
+use process::{show_process_by_pid, show_processes_by_name, SortOrder};
+use sysinfo::{ProcessesToUpdate, System};
 
 /// プロセス監視ツール
 #[derive(Parser, Debug)]
@@ -100,6 +101,10 @@ struct Args {
     /// 履歴をSQLiteに記録（watch/tuiモードのみ）
     #[arg(short, long)]
     log: Option<String>,
+
+    /// グラフ表示のデータポイント数（0で無効化）
+    #[arg(long, default_value = "60")]
+    graph_points: usize,
 }
 
 fn main() {
@@ -130,7 +135,7 @@ fn main() {
                 if args.tui {
                     // TUIモード
                     if let Some(name) = &args.name {
-                        if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb, args.log.as_deref()) {
+                        if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb, args.log.as_deref(), args.graph_points) {
                             eprintln!("Error running TUI: {}", e);
                             std::process::exit(1);
                         }
