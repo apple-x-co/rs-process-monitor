@@ -814,6 +814,33 @@ let tree_nodes = create_tree_nodes(&matching_processes);  // TGIDでグループ
 let total_memory: u64 = tree_nodes.iter().map(|n| n.memory_bytes).sum();  // 4プロセス分
 ```
 
+**修正4: TUI モードの統計計算修正（`src/tui.rs`）**
+
+TUI モードでも同じバグがあったため、通常モードと同様に修正。
+
+```rust
+// 修正前: グループ化前に統計計算（ui()関数 248-262行目）
+let total_memory: u64 = matching_processes.iter().map(|(_, p)| p.memory()).sum();  // 148スレッド分
+
+// 修正後: グループ化後に統計計算
+let tree_nodes = create_tree_nodes(&matching_processes);  // TGIDでグループ化
+let total_memory: u64 = tree_nodes.iter().map(|n| n.memory_bytes).sum();  // 4プロセス分
+```
+
+さらに、ツリーモード時に `tree_nodes` を再利用するように最適化（340-342行目）:
+
+```rust
+// 修正前: tree_nodes を2回作成（統計計算時とツリー描画時）
+let rows: Vec<Row> = if app.tree_mode {
+    let tree_nodes = create_tree_nodes(&matching_processes);  // 重複呼び出し
+    let flattened_tree = build_process_tree(&tree_nodes, sort_order);
+
+// 修正後: 統計計算で作成した tree_nodes を再利用
+let rows: Vec<Row> = if app.tree_mode {
+    // 統計計算で既に作成した tree_nodes を再利用
+    let flattened_tree = build_process_tree(&tree_nodes, sort_order);
+```
+
 #### 検証結果
 
 **修正後の出力（リモートサーバー）**:
@@ -833,6 +860,15 @@ Memory: 37.34 MB (Min: 1.36 MB, Avg: 9.33 MB, Max: 16.39 MB)  ✅
 ├─ 86774    httpd   81  0.00  16.39 MB  Sleep
 ├─ 86856    httpd   65  0.00  16.02 MB  Sleep  ✅ 表示されるようになった！
 └─ 13641    httpd   1   0.00  1.36 MB   Sleep
+```
+
+TUI モード:
+```
+System & Process Info
+────────────────────────────────────────
+System Memory: 397 MB / 769 MB (51.7%)
+Processes: 4 (148 threads) | CPU: 0.00%
+Memory: 37.34 MB (Min: 1.36 MB, Avg: 9.33 MB, Max: 16.39 MB)  ✅ 正確になった！
 ```
 
 **`ps auxfww` との比較**:
@@ -864,7 +900,8 @@ apache 86856  0.0  2.0 1540908 16404 ? Sl  1月09  0:16   \_ /usr/sbin/httpd
 **統計計算のタイミング**:
 - データの正規化（TGID グループ化）後に統計を計算
 - 同じロジックを複数箇所で使う場合、共通化が重要
-- 通常モードとツリーモードで `create_tree_nodes()` を共有することで整合性を保証
+- 通常モード、ツリーモード、TUI モードすべてで `create_tree_nodes()` を共有することで整合性を保証
+- **重要**: 新機能追加時、既存の全モードに同じバグがないか確認する必要がある
 
 **デバッグの重要性**:
 - `ps` コマンドとの比較が有効
@@ -879,9 +916,10 @@ apache 86856  0.0  2.0 1540908 16404 ? Sl  1月09  0:16   \_ /usr/sbin/httpd
 #### 価値
 
 - **正確性の向上**: 全プロセスが確実に表示される
-- **統計の信頼性**: 通常モードとツリーモードで統計が一致
+- **統計の信頼性**: 通常モード、ツリーモード、TUI モードすべてで統計が一致
 - **実用性**: 本番環境（Apache/PHP-FPM）での正確な監視が可能
 - **検証可能性**: `ps` コマンドとの完全一致により、正確性を検証できる
+- **パフォーマンス最適化**: TUI モードで `tree_nodes` の再利用により、重複計算を削減
 
 #### 次のステップ
 

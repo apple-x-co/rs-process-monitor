@@ -245,36 +245,25 @@ fn ui(
         }
     }
 
-    // 統計情報
-    let total_count = matching_processes.len();
-    let total_memory: u64 = matching_processes.iter().map(|(_, p)| p.memory()).sum();
-    let total_cpu: f32 = matching_processes.iter().map(|(_, p)| p.cpu_usage()).sum();
+    // TGIDでグループ化されたノードを作成（統計計算に使用）
+    let tree_nodes = create_tree_nodes(&matching_processes);
+
+    // 統計情報（グループ化後のノードから計算）
+    let actual_process_count = tree_nodes.len();
+    let total_memory: u64 = tree_nodes.iter().map(|n| n.memory_bytes).sum();
+    let total_cpu: f32 = tree_nodes.iter().map(|n| n.cpu_usage).sum();
+    let total_threads: usize = tree_nodes.iter().map(|n| n.thread_count).sum();
 
     // メモリの統計値（Min/Avg/Max）
-    let (min_memory, avg_memory, max_memory) = if total_count > 0 {
-        let memories: Vec<u64> = matching_processes.iter().map(|(_, p)| p.memory()).collect();
+    let (min_memory, avg_memory, max_memory) = if actual_process_count > 0 {
+        let memories: Vec<u64> = tree_nodes.iter().map(|n| n.memory_bytes).collect();
         let min = *memories.iter().min().unwrap_or(&0);
         let max = *memories.iter().max().unwrap_or(&0);
-        let avg = total_memory / total_count as u64;
+        let avg = total_memory / actual_process_count as u64;
         (min, avg, max)
     } else {
         (0, 0, 0)
     };
-
-    // スレッド数の集計（TGID でグループ化）
-    let mut pid_threads: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    for (_, process) in &matching_processes {
-        let lwp = process.pid().as_u32();
-        let tgid = get_tgid(lwp);
-
-        if !pid_threads.contains_key(&tgid) {
-            pid_threads.insert(tgid, get_thread_count(tgid));
-        }
-    }
-    let total_threads: usize = pid_threads.values().sum();
-
-    // 実際のプロセス数（ユニークなPID）
-    let actual_process_count = pid_threads.len();
 
     // ===== ヘッダー（システム情報追加） =====
     let title = if let Some(min_mb) = min_memory_mb {
@@ -349,7 +338,7 @@ fn ui(
 
     // ツリーモードの場合
     let rows: Vec<Row> = if app.tree_mode {
-        let tree_nodes = create_tree_nodes(&matching_processes);
+        // 統計計算で既に作成した tree_nodes を再利用
         let flattened_tree = build_process_tree(&tree_nodes, sort_order);
 
         let mut prefix_stack: Vec<bool> = Vec::new();
