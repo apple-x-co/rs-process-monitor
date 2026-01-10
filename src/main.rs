@@ -5,11 +5,12 @@ mod tui;
 mod history;
 mod analyze;
 mod graph;
+mod tree;
 
 use analyze::OutputFormat;
 use clap::{Parser, Subcommand};
 use monitor::{watch_mode, MonitorArgs};
-use process::{show_process_by_pid, show_processes_by_name, SortOrder};
+use process::{show_process_by_pid, show_processes_by_name, show_processes_by_name_tree, SortOrder};
 use sysinfo::{ProcessesToUpdate, System};
 
 /// プロセス監視ツール
@@ -105,6 +106,10 @@ struct Args {
     /// グラフ表示のデータポイント数（0で無効化）
     #[arg(long, default_value = "60")]
     graph_points: usize,
+
+    /// プロセスをツリー形式で表示
+    #[arg(long)]
+    tree: bool,
 }
 
 fn main() {
@@ -135,7 +140,7 @@ fn main() {
                 if args.tui {
                     // TUIモード
                     if let Some(name) = &args.name {
-                        if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb, args.log.as_deref(), args.graph_points) {
+                        if let Err(e) = tui::run_tui(name, &args.sort, interval, args.min_memory_mb, args.log.as_deref(), args.graph_points, args.tree) {
                             eprintln!("Error running TUI: {}", e);
                             std::process::exit(1);
                         }
@@ -151,6 +156,7 @@ fn main() {
                         sort: &args.sort,
                         min_memory_mb: args.min_memory_mb,
                         log_path: args.log.as_deref(),
+                        tree: args.tree,
                     };
                     watch_mode(monitor_args, interval);
                 }
@@ -168,7 +174,11 @@ fn single_shot_mode(args: &Args) {
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     if let Some(name) = &args.name {
-        show_processes_by_name(&sys, name, &args.sort, args.min_memory_mb);
+        if args.tree {
+            show_processes_by_name_tree(&sys, name, &args.sort, args.min_memory_mb);
+        } else {
+            show_processes_by_name(&sys, name, &args.sort, args.min_memory_mb);
+        }
     } else {
         let target_pid = args.pid.unwrap_or_else(|| std::process::id());
         show_process_by_pid(&sys, target_pid);

@@ -24,6 +24,7 @@
 - **通常モード**: テーブル形式の見やすい出力
 - **TUIモード**: リアルタイム更新のインタラクティブ表示
   - **グラフ可視化**: メモリ・CPU使用率のトレンドをSparklineで表示
+- **ツリー表示**: プロセスの親子関係を視覚的に表示
 
 ### 🔧 実用的な機能
 - プロセス名での検索（部分一致）
@@ -89,6 +90,25 @@ rs-process-monitor --name httpd --min-memory-mb 10
 
 # 正常なワーカープロセスのみを抽出
 rs-process-monitor --name php-fpm --min-memory-mb 5
+```
+
+### ツリー表示
+
+```bash
+# プロセスの親子関係をツリー形式で表示
+rs-process-monitor --name httpd --tree
+
+# ソートと組み合わせ（兄弟プロセス間でソート）
+rs-process-monitor --name httpd --tree --sort memory
+
+# メモリフィルタと組み合わせ
+rs-process-monitor --name httpd --tree --min-memory-mb 10
+
+# watch モードでツリー表示
+rs-process-monitor --name httpd --watch 2 --tree
+
+# TUI モードでツリー表示
+rs-process-monitor --name httpd --watch 2 --tui --tree
 ```
 
 ### リアルタイム監視
@@ -238,6 +258,27 @@ PID      Name                      Threads  CPU %    Memory       Status
 4104476  httpd                     1        0.00     1.59 MB      Sleep
 ```
 
+### ツリー表示モード
+
+```
+=== System Information ===
+System Memory: 397.27 MB / 769.15 MB (51.7% used, 371.88 MB available)
+Swap: 901.81 MB / 5.00 GB (17.6% used)
+
+=== Process Information (Tree View) ===
+Processes matching 'httpd' (sorted by Memory):
+Total: 4 process(es) (148 threads)
+Memory: 41.61 MB (Min: 1.59 MB, Avg: 10.40 MB, Max: 13.51 MB)
+CPU: 0.00%
+
+PID      Name                                Threads  CPU %    Memory       Status
+--------------------------------------------------------------------------------------------
+4104475  httpd                               1        0.00     4.31 MB      Sleep
+├─ 4170992  httpd                            65       0.00     13.51 MB     Sleep
+├─ 4149852  httpd                            81       0.00     12.20 MB     Sleep
+└─ 4104476  httpd                            1        0.00     1.59 MB      Sleep
+```
+
 ### TUIモード（グラフ表示付き）
 
 ```
@@ -299,6 +340,9 @@ Options:
       --graph-points <GRAPH_POINTS>
           グラフ表示のデータポイント数（0で無効化）
           [default: 60]
+
+      --tree
+          プロセスをツリー形式で表示（親子関係を可視化）
 
   -h, --help
           ヘルプを表示

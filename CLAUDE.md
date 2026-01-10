@@ -267,10 +267,6 @@ ORDER BY avg_mb DESC;
 - インデックスでクエリ性能確保
 - タイムスタンプを ISO 8601 形式で統一
 
-### Phase 7: データ分析機能（2026-01-06）
-
-（※このセクションの内容は変更なし）
-
 ### Phase 8: グラフ表示（TUI での可視化）（2026-01-08）
 
 #### 背景と目的
@@ -581,12 +577,319 @@ Total Records: 10
 - ユーザー入力: ISO 8601形式の文字列
 - クエリ時にパース・変換が必要
 
+### Phase 9: プロセスツリー表示機能（2026-01-09）
+
+#### 背景と目的
+
+Phase 8 までで履歴記録・分析・グラフ表示機能が完成したが、プロセスの親子関係を視覚的に把握する機能が欠けていた。実務では：
+- Apache の親プロセスと子プロセスの関係を確認したい
+- プロセスツリー構造を一目で理解したい
+- 階層構造を維持しながらソートしたい
+
+そこで、`--tree` オプションを追加してプロセスの親子関係をツリー形式で表示する機能を実装することにした。
+
+#### 実装内容
+
+**新規モジュール `src/tree.rs`**:
+- `ProcessTreeNode` 構造体: ツリー表示用のノード
+  - pid, parent_pid, process_name, cpu_usage, memory_bytes, thread_count, status
+  - depth (ツリーの深さ)、is_last_child (描画用フラグ)
+- ツリー描画用の定数:
+  - `TREE_BRANCH` ("├─ "), `TREE_LAST` ("└─ ")
+  - `TREE_VERTICAL` ("│  "), `TREE_SPACE` ("   ")
+- 関数:
+  - `create_tree_node()`: sysinfo::Process から ProcessTreeNode を作成
+  - `create_tree_nodes()`: プロセスリストを TGID でグループ化してノード化
+  - `build_process_tree()`: ツリー構造を構築してフラット化
+  - `generate_tree_prefix()`: ASCII プレフィックスを生成
+- ユニットテスト: 3件（プレフィックス生成のテスト）
+
+**ツリー構築アルゴリズム**:
+1. フィルタリング済みプロセスを `HashMap<pid, Node>` に格納
+2. 各ノードの `parent_pid` が HashMap に存在するか確認
+   - 存在: 子として登録
+   - 不存在: ルートとして扱う
+3. 兄弟間でソート適用（Memory/CPU/PID/Name）
+4. 深さ優先探索でフラット化（表示順序を決定）
+
+**親PID取得**:
+- `sysinfo::Process::parent()` で親PIDを取得（`Option<Pid>`）
+- 親PIDも `get_tgid()` でグループ化（Linux）
+
+**既存モジュールへの統合**:
+1. `src/process.rs`: `show_processes_by_name_tree()` 関数追加
+   - 既存のフィルタリングロジックを再利用
+   - ツリー構築後にプレフィックス付きで表示
+2. `src/main.rs`: `--tree` オプション追加
+   - `single_shot_mode()` で分岐処理
+3. `src/monitor.rs`: watch モードへの統合
+   - `MonitorArgs` に `tree: bool` フィールド追加
+4. `src/tui.rs`: TUI モードへの統合
+   - `TuiApp` に `tree_mode: bool` フィールド追加
+   - テーブル描画時にツリー表示ロジック分岐
+
+**デザイン特性**:
+- **表示範囲**: 検索結果のプロセス同士の親子関係のみ
+- **ソート連携**: ツリー構造を優先し、兄弟プロセス間でのみソート適用
+- **全モード対応**: 通常モード、watch モード、TUI モード全てで動作
+
+#### 使用例
+
+```bash
+# 通常モードでツリー表示
+rs-process-monitor --name httpd --tree
+
+# ソート指定（兄弟間でソート）
+rs-process-monitor --name httpd --tree --sort memory
+
+# メモリフィルタと組み合わせ
+rs-process-monitor --name httpd --tree --min-memory-mb 10
+
+# watch モードでツリー表示
+rs-process-monitor --name httpd --watch 2 --tree
+
+# TUI モードでツリー表示
+rs-process-monitor --name httpd --watch 2 --tui --tree
+
+# 全オプション組み合わせ
+rs-process-monitor --name httpd --watch 2 --tui --tree --min-memory-mb 10 --log /tmp/httpd.db
+```
+
+#### 出力例
+
+```
+=== Process Information (Tree View) ===
+Processes matching 'httpd' (sorted by Memory):
+Total: 4 process(es) (148 threads)
+Memory: 41.61 MB (Min: 1.59 MB, Avg: 10.40 MB, Max: 13.51 MB)
+CPU: 0.00%
+
+PID      Name                                Threads  CPU %    Memory       Status
+--------------------------------------------------------------------------------------------
+4104475  httpd                               1        0.00     4.31 MB      Sleep
+├─ 4170992  httpd                            65       0.00     13.51 MB     Sleep
+├─ 4149852  httpd                            81       0.00     12.20 MB     Sleep
+└─ 4104476  httpd                            1        0.00     1.59 MB      Sleep
+```
+
+#### 動作確認結果
+
+- ✅ `src/tree.rs` 作成（ProcessTreeNode + ツリー構築アルゴリズム）
+- ✅ ユニットテスト合格（3/3）
+- ✅ 通常モードでのツリー表示動作確認
+- ✅ watch モードでのツリー表示動作確認
+- ✅ TUI モードでのツリー表示動作確認
+- ✅ ソート機能との連携動作確認
+- ✅ メモリフィルタとの併用動作確認
+- ✅ ビルド成功、コンパイル警告なし
+
+#### 学び
+
+**設計パターン**:
+- 新規モジュール分割（関心の分離）
+- 既存パターンの踏襲（`Option<bool>` によるオプショナル機能）
+- データ変換の層化（Process → TreeNode → Flattened List）
+
+**Rust の機能**:
+- `HashMap` による効率的なツリー構築
+- 深さ優先探索の実装
+- `Vec<bool>` によるスタック管理（プレフィックス生成）
+
+**アルゴリズム設計**:
+- 親子関係の解析（検索結果内のみ）
+- 兄弟間ソートの実装
+- 深さ優先探索による表示順序の決定
+
+**TUI 実装**:
+- 既存の描画ロジックとの統合
+- 動的なレイアウト切り替え（ツリーモード ON/OFF）
+
+#### 価値
+
+- **視覚的な理解**: プロセスの親子関係が一目瞭然
+- **Apache 最適化**: 親プロセスと子プロセスの構成が明確
+- **柔軟性**: 既存の全機能（ソート、フィルタ、watch、TUI）と組み合わせ可能
+
+### Phase 9.1: ツリー表示のバグ修正（2026-01-10）
+
+#### 発見された問題
+
+リモートサーバー（CentOS）での実行時に2つの重大なバグを発見：
+
+**問題1: プロセスが消える**
+- ツリーモードで PID 86856 が表示されない
+- 通常モード: 4プロセス表示 ✅
+- ツリーモード: 3プロセスのみ表示 ❌（PID 86856 が消失）
+
+**問題2: メモリ合計が異常**
+- 通常モード: Memory: **2.32 GB** ❌（実際の約62倍）
+- ツリーモード: Memory: **37.34 MB** ✅（正確）
+
+#### 原因分析
+
+**問題1の原因**: マルチスレッドプロセスの親PID処理
+
+Linux では、各スレッド（LWP）が個別のプロセスとして扱われる。スレッドの `parent()` は、そのプロセスのメインスレッド（TGID）を指すことがあり、これが**自己参照**を引き起こしていた。
+
+```
+例: PID 86856 の場合
+- メインスレッド: LWP 86856 (TGID: 86856)
+- 子スレッド: LWP 86857, 86858, ... (TGID: 86856)
+- sysinfo が返す parent(): いずれかのスレッドを基準に取得
+- 問題: LWP 86857 の parent() → 86856 → get_tgid() → 86856（自己参照！）
+```
+
+この場合、PID 86856 は：
+- ルートとして登録されない（parent_pid が存在するため）
+- 誰の子としても登録されない（自分自身を親としているため）
+- **結果**: ツリー構築時に訪問されず、表示されない
+
+**問題2の原因**: 統計計算のタイミング
+
+通常モードでは、TGID グループ化の**前**に統計計算を行っていたため、全スレッド（148個）のメモリを合計していた。
+
+```
+148 threads × 約16 MB ≈ 2,368 MB ≈ 2.32 GB ❌
+```
+
+#### 修正内容
+
+**修正1: メインスレッド優先選択（`src/tree.rs`）**
+
+`create_tree_nodes()` で、各 TGID に対して**メインスレッド（LWP == TGID）を優先的に使用**するように変更。
+
+```rust
+// 修正前: 最初に見つけたスレッドを使用（順序依存）
+for (_, process) in processes {
+    let tgid = get_tgid(lwp);
+    if !seen_pids.contains(&tgid) {
+        nodes.push(create_tree_node(process));  // 任意のスレッドを使用
+    }
+}
+
+// 修正後: メインスレッドを優先的に選択
+let mut tgid_to_process: HashMap<u32, &Process> = HashMap::new();
+for (_, process) in processes {
+    let lwp = process.pid().as_u32();
+    let tgid = get_tgid(lwp);
+
+    if lwp == tgid {
+        // メインスレッド優先
+        tgid_to_process.insert(tgid, process);
+    } else if !tgid_to_process.contains_key(&tgid) {
+        // フォールバック
+        tgid_to_process.insert(tgid, process);
+    }
+}
+```
+
+これにより、正しい親PID情報を取得できるようになった。
+
+**修正2: 自己参照の検出（`src/tree.rs`）**
+
+`build_process_tree()` で、親PIDが自分自身を指している場合、**ルートとして扱う**ように修正。
+
+```rust
+if let Some(parent_pid) = node.parent_pid {
+    if parent_pid == *pid {
+        // 自己参照 -> ルートとして扱う
+        root_pids.push(*pid);
+    } else if nodes_map.contains_key(&parent_pid) {
+        // 通常の親子関係
+        children_map.entry(parent_pid).or_default().push(*pid);
+    }
+}
+```
+
+**修正3: 通常モードの統計計算修正（`src/process.rs`）**
+
+TGID グループ化**後**に統計計算を行うように変更。
+
+```rust
+// 修正前: グループ化前に統計計算
+let total_memory: u64 = matching_processes.iter().map(|(_, p)| p.memory()).sum();  // 148スレッド分
+
+// 修正後: グループ化後に統計計算
+let tree_nodes = create_tree_nodes(&matching_processes);  // TGIDでグループ化
+let total_memory: u64 = tree_nodes.iter().map(|n| n.memory_bytes).sum();  // 4プロセス分
+```
+
+#### 検証結果
+
+**修正後の出力（リモートサーバー）**:
+
+通常モード:
+```
+Total: 4 process(es) (148 threads)
+Memory: 37.34 MB (Min: 1.36 MB, Avg: 9.33 MB, Max: 16.39 MB)  ✅
+```
+
+ツリーモード:
+```
+Total: 4 process(es) (148 threads)
+Memory: 37.34 MB (Min: 1.36 MB, Avg: 9.33 MB, Max: 16.39 MB)  ✅
+
+13640    httpd      1   0.00  3.57 MB   Sleep
+├─ 86774    httpd   81  0.00  16.39 MB  Sleep
+├─ 86856    httpd   65  0.00  16.02 MB  Sleep  ✅ 表示されるようになった！
+└─ 13641    httpd   1   0.00  1.36 MB   Sleep
+```
+
+**`ps auxfww` との比較**:
+
+```bash
+$ ps auxfww | grep httpd
+root   13640  0.0  0.4  22520  3656 ?  Ss  1月05  0:23  /usr/sbin/httpd
+apache 13641  0.0  0.1  24520  1396 ?  S   1月05  0:00   \_ /usr/sbin/httpd
+apache 86774  0.0  2.1 1672044 16780 ? Sl  1月09  0:19   \_ /usr/sbin/httpd
+apache 86856  0.0  2.0 1540908 16404 ? Sl  1月09  0:16   \_ /usr/sbin/httpd
+```
+
+**完全一致！** ✅
+
+| PID | ps (RSS) | rs-process-monitor | 親子関係 |
+|-----|----------|-------------------|---------|
+| 13640 | 3656 KB | 3.57 MB | 親 |
+| 13641 | 1396 KB | 1.36 MB | 子 |
+| 86774 | 16780 KB | 16.39 MB | 子 |
+| 86856 | 16404 KB | 16.02 MB | 子 ✅ |
+
+#### 学び
+
+**マルチスレッドプロセスの親PID取得**:
+- スレッドの `parent()` は信頼できない場合がある
+- メインスレッド（LWP == TGID）を優先的に使用することが重要
+- 自己参照のチェックが必須
+
+**統計計算のタイミング**:
+- データの正規化（TGID グループ化）後に統計を計算
+- 同じロジックを複数箇所で使う場合、共通化が重要
+- 通常モードとツリーモードで `create_tree_nodes()` を共有することで整合性を保証
+
+**デバッグの重要性**:
+- `ps` コマンドとの比較が有効
+- 実際の本番環境（リモートサーバー）でのテストが不可欠
+- ローカル（macOS）では再現しない問題もある
+
+**データ構造の設計**:
+- HashMap を使ったメインスレッド優先選択
+- 明示的な優先順位制御（if lwp == tgid）
+- フォールバック処理の実装
+
+#### 価値
+
+- **正確性の向上**: 全プロセスが確実に表示される
+- **統計の信頼性**: 通常モードとツリーモードで統計が一致
+- **実用性**: 本番環境（Apache/PHP-FPM）での正確な監視が可能
+- **検証可能性**: `ps` コマンドとの完全一致により、正確性を検証できる
+
 #### 次のステップ
 
 **実装優先順位**:
 - ✅ Phase 5-1: 履歴記録（完了: 2026-01-05）
 - ✅ Phase 5-2: 分析機能（完了: 2026-01-06）
 - ✅ Phase 5-3: グラフ表示（完了: 2026-01-08）
+- ✅ Phase 5-4: プロセスツリー表示（完了: 2026-01-09）
 - 🔜 Phase 6: アラート機能（閾値監視とWebhook通知）
 - 🔜 Phase 7: 設定ファイル対応（プロファイル管理）
 
@@ -667,6 +970,7 @@ Apache設定の調査は別途継続。優先度の高い調査項目:
 - [x] 通常モード（テキスト表形式）
 - [x] TUIモード（リアルタイム更新）
 - [x] ソート機能（Memory/CPU/PID/Name）
+- [x] ツリー表示（プロセスの親子関係を可視化）
 
 #### 実用機能
 - [x] メモリフィルタ（最小メモリ指定）
@@ -904,18 +1208,23 @@ rs-process-monitor --name httpd --verbose
    - Sparkline による メモリ・CPU トレンド表示
    - リングバッファによる効率的なデータ管理
 
-4. **設定ファイル対応**（Phase 9）
+4. ✅ **プロセスツリー表示**（Phase 9）- **完了（2026-01-09）**
+   - `--tree` オプションの追加
+   - 親子関係の可視化
+   - 全モード（通常/watch/TUI）で動作
+
+5. **設定ファイル対応**（Phase 10）
    - よく使うオプションの組み合わせを保存
    - UX向上につながる
 
 余裕があれば:
-3. **アラート機能**（Phase 6）
+6. **アラート機能**（Phase 11）
    - 自動監視に便利
    - Webhook対応で運用が楽になる
 
 後回しでOK:
-5. プロセスツリー表示、その他の拡張
-   - あると便利だが、必須ではない
+7. その他の拡張
+   - CSV エクスポート、相対時間指定など
 
 ## 📚 参考リソース
 
@@ -950,7 +1259,8 @@ rs-process-monitor --name httpd --verbose
 - ✅ Phase 6（履歴記録機能）完了
 - ✅ Phase 7（分析機能）完了
 - ✅ Phase 8（グラフ表示）完了
-- 🔜 Phase 9（設定ファイル対応）が次の目標
+- ✅ Phase 9（プロセスツリー表示）完了
+- 🔜 Phase 10（設定ファイル対応）が次の目標
 - Apache設定問題は別途調査
 
 ---
@@ -960,6 +1270,8 @@ rs-process-monitor --name httpd --verbose
 - Phase 6: 2026年1月5日
 - Phase 7: 2026年1月6日
 - Phase 8: 2026年1月8日
+- Phase 9: 2026年1月9日
+- Phase 9.1（バグ修正）: 2026年1月10日
 
 **作成者**: [@apple-x-co](https://github.com/apple-x-co)
 **Claude対話**: Claude Sonnet 4.5

@@ -5,6 +5,7 @@ use crate::formatter::{
 use crate::graph::GraphData;
 use crate::history::ProcessHistory;
 use crate::process::{SortOrder, create_snapshots};
+use crate::tree::{build_process_tree, create_tree_nodes, generate_tree_prefix};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -29,10 +30,11 @@ pub struct TuiApp {
     update_interval: Duration,
     history: Option<ProcessHistory>,
     graph_data: Option<GraphData>,
+    tree_mode: bool,
 }
 
 impl TuiApp {
-    pub fn new(interval_secs: u64, log_path: Option<&str>, graph_points: usize) -> Self {
+    pub fn new(interval_secs: u64, log_path: Option<&str>, graph_points: usize, tree_mode: bool) -> Self {
         let history = if let Some(path) = log_path {
             match ProcessHistory::new(path) {
                 Ok(h) => Some(h),
@@ -58,6 +60,7 @@ impl TuiApp {
             update_interval: Duration::from_secs(interval_secs),
             history,
             graph_data,
+            tree_mode,
         }
     }
 
@@ -78,6 +81,7 @@ pub fn run_tui(
     min_memory_mb: Option<u64>,
     log_path: Option<&str>,
     graph_points: usize,
+    tree_mode: bool,
 ) -> Result<(), io::Error> {
     // ターミナルの初期化
     enable_raw_mode()?;
@@ -87,7 +91,7 @@ pub fn run_tui(
     let mut terminal = Terminal::new(backend)?;
 
     // アプリの実行
-    let mut app = TuiApp::new(interval_secs, log_path, graph_points);
+    let mut app = TuiApp::new(interval_secs, log_path, graph_points, tree_mode);
     let mut sys = System::new_all();
 
     let res = run_app(
@@ -343,29 +347,60 @@ fn ui(
         });
     let header_row = Row::new(header_cells).height(1).bottom_margin(1);
 
-    // ユニークなPIDだけを表示
-    let mut seen_pids = std::collections::HashSet::new();
-    let rows = matching_processes.iter().filter_map(|(_, process)| {
-        let lwp = process.pid().as_u32();
-        let tgid = get_tgid(lwp);
+    // ツリーモードの場合
+    let rows: Vec<Row> = if app.tree_mode {
+        let tree_nodes = create_tree_nodes(&matching_processes);
+        let flattened_tree = build_process_tree(&tree_nodes, sort_order);
 
-        // 既に表示したPIDはスキップ
-        if seen_pids.contains(&tgid) {
-            return None;
-        }
-        seen_pids.insert(tgid);
+        let mut prefix_stack: Vec<bool> = Vec::new();
+        flattened_tree.iter().map(|node| {
+            // プレフィックス更新
+            while prefix_stack.len() > node.depth {
+                prefix_stack.pop();
+            }
+            if node.depth > 0 && prefix_stack.len() < node.depth {
+                prefix_stack.push(!node.is_last_child);
+            }
 
-        let thread_count = get_thread_count(tgid);
-        let cells = vec![
-            Cell::from(format!("{}", tgid)), // LWPではなくTGIDを表示
-            Cell::from(truncate_string(&process.name().to_string_lossy(), 20)),
-            Cell::from(format!("{}", thread_count)),
-            Cell::from(format!("{:.2}", process.cpu_usage())),
-            Cell::from(format_bytes(process.memory())),
-            Cell::from(format_status(process.status())),
-        ];
-        Some(Row::new(cells).height(1))
-    });
+            let prefix = generate_tree_prefix(node.depth, node.is_last_child, &prefix_stack);
+            let max_name_len = 17usize.saturating_sub(node.depth * 3);
+            let name_display = format!("{}{}", prefix, truncate_string(&node.process_name, max_name_len));
+
+            let cells = vec![
+                Cell::from(format!("{}", node.pid)),
+                Cell::from(name_display),
+                Cell::from(format!("{}", node.thread_count)),
+                Cell::from(format!("{:.2}", node.cpu_usage)),
+                Cell::from(format_bytes(node.memory_bytes)),
+                Cell::from(format_status(node.status)),
+            ];
+            Row::new(cells).height(1)
+        }).collect()
+    } else {
+        // 通常モード: ユニークなPIDだけを表示
+        let mut seen_pids = std::collections::HashSet::new();
+        matching_processes.iter().filter_map(|(_, process)| {
+            let lwp = process.pid().as_u32();
+            let tgid = get_tgid(lwp);
+
+            // 既に表示したPIDはスキップ
+            if seen_pids.contains(&tgid) {
+                return None;
+            }
+            seen_pids.insert(tgid);
+
+            let thread_count = get_thread_count(tgid);
+            let cells = vec![
+                Cell::from(format!("{}", tgid)), // LWPではなくTGIDを表示
+                Cell::from(truncate_string(&process.name().to_string_lossy(), 20)),
+                Cell::from(format!("{}", thread_count)),
+                Cell::from(format!("{:.2}", process.cpu_usage())),
+                Cell::from(format_bytes(process.memory())),
+                Cell::from(format_status(process.status())),
+            ];
+            Some(Row::new(cells).height(1))
+        }).collect()
+    };
 
     let table = Table::new(
         rows,
